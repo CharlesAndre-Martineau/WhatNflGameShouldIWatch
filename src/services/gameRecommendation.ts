@@ -1,0 +1,327 @@
+import axios from 'axios';
+import { SleeperLeague, GameRecommendation } from './sleeperApi';
+
+const SLEEPER_API_BASE = 'https://api.sleeper.app/v1';
+
+// ESPN Team ID to NFL Abbreviation Mapping
+// Based on ESPN's team ID system
+const ESPN_TEAM_ID_MAP: Record<string, string> = {
+  '1': 'ATL',   // Atlanta Falcons
+  '2': 'BUF',   // Buffalo Bills
+  '3': 'BAL',   // Baltimore Ravens
+  '4': 'PHI',   // Philadelphia Eagles
+  '5': 'DET',   // Detroit Lions
+  '6': 'CHI',   // Chicago Bears
+  '7': 'NYG',   // New York Giants
+  '8': 'CLE',   // Cleveland Browns
+  '9': 'MIA',   // Miami Dolphins
+  '10': 'SEA',  // Seattle Seahawks
+  '11': 'WAS',  // Washington Commanders
+  '12': 'NE',   // New England Patriots
+  '13': 'GB',   // Green Bay Packers
+  '14': 'TB',   // Tampa Bay Buccaneers
+  '15': 'IND',  // Indianapolis Colts
+  '16': 'TEN',  // Tennessee Titans
+  '17': 'NO',   // New Orleans Saints
+  '18': 'LAC',  // Los Angeles Chargers
+  '19': 'NYJ',  // New York Jets
+  '20': 'DEN',  // Denver Broncos
+  '21': 'MIN',  // Minnesota Vikings
+  '22': 'KC',   // Kansas City Chiefs
+  '23': 'LAR',  // Los Angeles Rams
+  '24': 'PIT',  // Pittsburgh Steelers
+  '25': 'ARI',  // Arizona Cardinals
+  '26': 'CIN',  // Cincinnati Bengals
+  '27': 'LV',   // Las Vegas Raiders
+  '28': 'SF',   // San Francisco 49ers
+  '29': 'CAR',  // Carolina Panthers
+  '30': 'JAC',  // Jacksonville Jaguars
+  '31': 'HOU',  // Houston Texans
+  '32': 'DAL',  // Dallas Cowboys
+  '33': 'TB',   // Tampa Bay Buccaneers (backup)
+  '34': 'KC',   // Kansas City Chiefs (backup)
+};
+
+// Cache for players data to avoid repeated large API calls
+let playersCache: Record<string, any> = {};
+let playersCacheTime = 0;
+const CACHE_DURATION = 3600000; // 1 hour
+
+/**
+ * Get all fantasy teams for a user across all leagues
+ */
+export async function getUserFantasyTeams(
+  userId: string,
+  season: number
+): Promise<SleeperLeague[]> {
+  const response = await axios.get(
+    `${SLEEPER_API_BASE}/user/${userId}/leagues/nfl/${season}`
+  );
+  return response.data;
+}
+
+/**
+ * Get all players data with caching
+ */
+export async function getAllPlayersData(): Promise<Record<string, any>> {
+  const now = Date.now();
+  
+  // Return cached data if still valid
+  if (Object.keys(playersCache).length > 0 && (now - playersCacheTime) < CACHE_DURATION) {
+    return playersCache;
+  }
+
+  const response = await axios.get(`${SLEEPER_API_BASE}/players/nfl`);
+  playersCache = response.data;
+  playersCacheTime = now;
+  
+  return playersCache;
+}
+
+/**
+ * Get NFL schedule for current week using ESPN API
+ */
+export async function getWeekGamesFromESPN(season: number, week: number): Promise<any[]> {
+  try {
+    const eventsUrl = `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/${season}/types/2/weeks/${week}/events`;
+    const response = await axios.get(eventsUrl);
+    
+    if (!response.data.items || response.data.items.length === 0) {
+      return [];
+    }
+
+    // Fetch detailed event data for each game
+    const gamePromises = response.data.items.map((item: any) => {
+      // Extract game ID from the $ref URL
+      const gameId = item.$ref.match(/events\/(\d+)/)?.[1];
+      if (!gameId) return null;
+      
+      return axios.get(
+        `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/events/${gameId}`
+      );
+    }).filter(Boolean);
+
+    const gameResponses = await Promise.all(gamePromises);
+    
+    const games = gameResponses.map((response) => {
+      const event = response.data;
+      if (!event.competitions || event.competitions.length === 0) {
+        return null;
+      }
+
+      const competition = event.competitions[0];
+      const competitors = competition.competitors || [];
+      
+      let homeTeam = '';
+      let awayTeam = '';
+
+      // Extract team abbreviations using ESPN team ID mapping
+      competitors.forEach((competitor: any) => {
+        const teamId = String(competitor.id);
+        const teamAbbr = ESPN_TEAM_ID_MAP[teamId] || '';
+        
+        console.log(`Debug ESPN Competitor: ID=${teamId}, Mapped=${teamAbbr}, HomeAway=${competitor.homeAway}`);
+        
+        if (competitor.homeAway === 'home') {
+          homeTeam = teamAbbr;
+        } else if (competitor.homeAway === 'away') {
+          awayTeam = teamAbbr;
+        }
+      });
+
+      console.log(`Debug ESPN: Event ${event.id} - Away: ${awayTeam}, Home: ${homeTeam}`);
+
+      return {
+        week,
+        season,
+        away_team: awayTeam,
+        home_team: homeTeam,
+        kickoff: event.date ? new Date(event.date).getTime() : 0,
+        status: competition.status?.type || 'scheduled',
+        name: event.name || `${awayTeam} @ ${homeTeam}`,
+      };
+    }).filter(Boolean);
+
+    return games;
+  } catch (error) {
+    console.error('Error fetching NFL schedule from ESPN:', error);
+    return [];
+  }
+}
+
+/**
+ * Get current NFL state (week, season)
+ */
+export async function getNFLState(): Promise<any> {
+  const response = await axios.get(`${SLEEPER_API_BASE}/state/nfl`);
+  return response.data;
+}
+
+/**
+ * Analyze rosters and find the game with most players
+ */
+export async function getRecommendedGame(
+  userId: string
+): Promise<GameRecommendation | null> {
+  try {
+    // Get current NFL state for season
+    const nflState = await getNFLState();
+    const season = nflState.season;
+    
+    // Use the current week from Sleeper API
+    // During off-season, this will point to next season's games
+    let currentWeek = nflState.week;
+    
+    console.log(`Debug: NFL State - Season: ${season}, Week: ${nflState.week}`);
+    
+    // If we're in off-season (week > 18), adjust to fetch the actual current week
+    // The NFL regular season is weeks 1-18
+    if (currentWeek > 18) {
+      // We're likely in post-season or off-season
+      // Try to use week 1 for the current active season
+      currentWeek = 1;
+      console.log(`Debug: Off-season detected, adjusted week to: ${currentWeek}`);
+    }
+
+    // Get all leagues for user
+    const leagues = await getUserFantasyTeams(userId, season);
+    
+    console.log('Debug: Leagues found =', leagues.length);
+    if (leagues.length === 0) {
+      console.warn('No leagues found for user');
+      return null;
+    }
+
+    // Get all players data once
+    const allPlayers = await getAllPlayersData();
+
+    // Collect all players from all leagues
+    const playerGameMap = new Map<string, number>(); // NFL team -> count
+    const playerDetailsMap = new Map<string, Array<{ name: string; position: string; league: string; isStarter: boolean }>>(); // NFL team -> player_info
+
+    for (const league of leagues) {
+      try {
+        // Get rosters for this league
+        const rostersResponse = await axios.get(
+          `${SLEEPER_API_BASE}/league/${league.league_id}/rosters`
+        );
+        
+        // Find user's roster (match by owner_id)
+        const userRoster = rostersResponse.data.find(
+          (r: any) => r.owner_id === userId
+        );
+        
+        console.log(`Debug: League ${league.league_id} (${league.name}) - Roster found: ${!!userRoster}`);
+        if (!userRoster) {
+          console.warn(`No roster found for user in league ${league.league_id}`);
+        }
+        
+        if (!userRoster || !userRoster.players || userRoster.players.length === 0) {
+          console.log(`Debug: League ${league.league_id} - Skipping (no players)`);
+          continue;
+        }
+
+        console.log(`Debug: League ${league.league_id} (${league.name}) - Players: ${userRoster.players.length}`);
+        console.log(`Debug: League ${league.league_id} - Starters: ${userRoster.starters?.length || 0}`);
+
+        // Count players by their NFL team
+        userRoster.players.forEach((playerId: string) => {
+          const player = allPlayers[playerId];
+          if (player && player.team) {
+            const nflTeam = player.team;
+            playerGameMap.set(nflTeam, (playerGameMap.get(nflTeam) || 0) + 1);
+            
+            if (!playerDetailsMap.has(nflTeam)) {
+              playerDetailsMap.set(nflTeam, []);
+            }
+            
+            const playerName = player.first_name && player.last_name 
+              ? `${player.first_name} ${player.last_name}`
+              : player.full_name || playerId;
+            
+            const position = player.position || 'N/A';
+            const leagueName = league.name || `League ${league.league_id}`;
+            const isStarter = userRoster.starters?.includes(playerId) || false;
+              
+            playerDetailsMap.get(nflTeam)!.push({ name: playerName, position, league: leagueName, isStarter });
+          }
+        });
+      } catch (error) {
+        console.error(`Error processing league ${league.league_id}:`, error);
+        continue;
+      }
+    }
+
+    // Find NFL team with most players
+    let maxTeam = '';
+    let maxCount = 0;
+    playerGameMap.forEach((count, team) => {
+      if (count > maxCount) {
+        maxCount = count;
+        maxTeam = team;
+      }
+    });
+
+    if (!maxTeam || maxCount === 0) {
+      return null;
+    }
+
+    // Get games for current week from ESPN
+    // Try to find games that are actually this week (November 2025)
+    let games: any[] = [];
+    const now = Date.now();
+    const oneWeekMs = 7 * 24 * 60 * 60 * 1000; // 7 days
+    const twoWeeksAgo = now - oneWeekMs;
+    const fourWeeksFromNow = now + (4 * oneWeekMs);
+    
+    // Try multiple weeks to find games that are actually in the current timeframe
+    for (let i = 0; i < 5; i++) {
+      const tryWeek = currentWeek + i;
+      const weekGames = await getWeekGamesFromESPN(season, tryWeek);
+      console.log(`Debug: Week ${tryWeek} - Found ${weekGames.length} games`);
+      
+      // Check if any games are in the current timeframe (this week)
+      const recentGames = weekGames.filter((game: any) => {
+        return game.kickoff >= twoWeeksAgo && game.kickoff <= fourWeeksFromNow;
+      });
+      
+      if (recentGames.length > 0) {
+        console.log(`Debug: Found ${recentGames.length} games in current timeframe at week ${tryWeek}`);
+        games = recentGames;
+        currentWeek = tryWeek;
+        break;
+      }
+    }
+    
+    console.log('Debug: maxTeam =', maxTeam);
+    console.log('Debug: currentWeek =', currentWeek);
+    console.log('Debug: Total games fetched =', games.length);
+    console.log('Debug: Games data:', games.map(g => ({ away: g.away_team, home: g.home_team, kickoff: new Date(g.kickoff).toISOString() })));
+    console.log('Debug: Player counts by team:', Array.from(playerGameMap.entries()));
+    
+    // Find games for the current week that involve the team with most players
+    const matchingGames = games.filter((game: any) => {
+      return (
+        game.away_team === maxTeam || game.home_team === maxTeam
+      );
+    });
+
+    console.log('Debug: Matching games found =', matchingGames.length);
+
+    if (matchingGames.length === 0) {
+      console.warn(`No games found for team ${maxTeam} in the current timeframe`);
+      return null;
+    }
+
+    const matchingGame = matchingGames[0];
+
+    return {
+      game: matchingGame,
+      playerCount: maxCount,
+      players: playerDetailsMap.get(maxTeam) || [],
+    };
+  } catch (error) {
+    console.error('Error fetching recommended game:', error);
+    throw error;
+  }
+}
