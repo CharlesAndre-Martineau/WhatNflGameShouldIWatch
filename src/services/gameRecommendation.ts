@@ -162,7 +162,8 @@ export async function getNFLState(): Promise<any> {
  */
 export async function getRecommendedGames(
   userId: string,
-  numberOfGames: number = 1
+  numberOfGames: number = 1,
+  onlyStarters: boolean = false
 ): Promise<GameRecommendation[]> {
   try {
     // Get current NFL state for season
@@ -302,7 +303,7 @@ export async function getRecommendedGames(
     console.log('Debug: Player counts by team:', Array.from(playerGameMap.entries()));
     
     // Build a map of games to player counts (either team in the game)
-    const gamePlayerCounts: Array<{game: any, playerCount: number, teams: string[]}> = [];
+    const gamePlayerCounts: Array<{game: any, playerCount: number, teams: string[], starterCount?: number}> = [];
     
     for (const game of games) {
       const awayTeamCount = playerGameMap.get(game.away_team) || 0;
@@ -315,20 +316,38 @@ export async function getRecommendedGames(
         if (awayTeamCount > 0) teamsWithPlayers.push(game.away_team);
         if (homeTeamCount > 0) teamsWithPlayers.push(game.home_team);
         
+        // Calculate starter count if needed
+        let starterCount = 0;
+        if (onlyStarters) {
+          for (const team of teamsWithPlayers) {
+            const teamPlayers = playerDetailsMap.get(team) || [];
+            starterCount += teamPlayers.filter(p => p.isStarter).length;
+          }
+        }
+        
         gamePlayerCounts.push({
           game,
           playerCount: totalPlayerCount,
-          teams: teamsWithPlayers
+          teams: teamsWithPlayers,
+          starterCount
         });
       }
     }
     
     // Sort games by player count (descending)
-    gamePlayerCounts.sort((a, b) => b.playerCount - a.playerCount);
+    // If onlyStarters is true, sort by starter count; otherwise sort by total count
+    gamePlayerCounts.sort((a, b) => {
+      if (onlyStarters) {
+        return (b.starterCount || 0) - (a.starterCount || 0);
+      } else {
+        return b.playerCount - a.playerCount;
+      }
+    });
     
     console.log(`Debug: Games with your players: ${gamePlayerCounts.length}`);
     gamePlayerCounts.forEach((g, idx) => {
-      console.log(`  ${idx + 1}. ${g.game.away_team} @ ${g.game.home_team} (${g.playerCount} players from ${g.teams.join(', ')})`);
+      const countToShow = onlyStarters ? g.starterCount : g.playerCount;
+      console.log(`  ${idx + 1}. ${g.game.away_team} @ ${g.game.home_team} (${countToShow} players from ${g.teams.join(', ')})`);
     });
     
     // Find games for the top N games with most players
@@ -368,6 +387,6 @@ export async function getRecommendedGames(
 export async function getRecommendedGame(
   userId: string
 ): Promise<GameRecommendation | null> {
-  const recommendations = await getRecommendedGames(userId, 1);
+  const recommendations = await getRecommendedGames(userId, 1, true);
   return recommendations.length > 0 ? recommendations[0] : null;
 }

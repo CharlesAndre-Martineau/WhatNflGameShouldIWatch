@@ -141,29 +141,56 @@ h1 {
 }
 
 .starters-toggle {
-  padding: 10px 12px;
-  background-color: #f0f4ff;
-  border: 1px solid #e0e7ff;
-  border-radius: 6px;
+  padding: 0;
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
 }
 
-.toggle-label {
+.toggle-switch {
   display: flex;
   align-items: center;
   cursor: pointer;
   user-select: none;
+  gap: 12px;
 }
 
-.toggle-input {
-  width: 16px;
-  height: 16px;
-  margin-right: 8px;
-  cursor: pointer;
-  accent-color: #667eea;
+.toggle-checkbox {
+  display: none;
+}
+
+.toggle-slider {
+  position: relative;
+  width: 48px;
+  height: 28px;
+  background-color: #ccc;
+  border-radius: 14px;
+  transition: background-color 0.3s ease;
+  flex-shrink: 0;
+}
+
+.toggle-checkbox:checked + .toggle-slider {
+  background-color: #667eea;
+}
+
+.toggle-slider::after {
+  content: '';
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  background-color: white;
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  transition: left 0.3s ease;
+}
+
+.toggle-checkbox:checked + .toggle-slider::after {
+  left: 22px;
 }
 
 .toggle-text {
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   color: #333;
   font-weight: 500;
 }

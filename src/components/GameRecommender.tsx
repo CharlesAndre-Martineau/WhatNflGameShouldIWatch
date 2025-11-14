@@ -8,7 +8,7 @@ export const GameRecommender: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [recommendations, setRecommendations] = useState<GameRecommendation[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [onlyStarters, setOnlyStarters] = useState(false);
+  const [onlyStarters, setOnlyStarters] = useState(true);
   const [numberOfGames, setNumberOfGames] = useState(1);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -34,7 +34,7 @@ export const GameRecommender: React.FC = () => {
       }
 
       const userData = await userResponse.json();
-      const gameRecommendations = await getRecommendedGames(userData.user_id, numberOfGames);
+      const gameRecommendations = await getRecommendedGames(userData.user_id, numberOfGames, onlyStarters);
 
       if (!gameRecommendations || gameRecommendations.length === 0) {
         setError(
@@ -81,14 +81,15 @@ export const GameRecommender: React.FC = () => {
         <form onSubmit={handleSubmit} className="search-form">
           <div className="form-group">
             <div className="starters-toggle">
-              <label className="toggle-label">
+              <label className="toggle-switch">
                 <input
                   type="checkbox"
                   checked={onlyStarters}
                   onChange={(e) => setOnlyStarters(e.target.checked)}
-                  className="toggle-input"
+                  className="toggle-checkbox"
                 />
-                <span className="toggle-text">Only count starters when finding game</span>
+                <span className="toggle-slider"></span>
+                <span className="toggle-text">Only count starters</span>
               </label>
             </div>
             <div className="number-selector">
