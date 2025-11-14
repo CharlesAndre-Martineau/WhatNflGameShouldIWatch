@@ -434,24 +434,40 @@ export async function getRecommendedGames(
       const homeTeamCount = playerGameMap.get(game.home_team) || 0;
       const totalPlayerCount = awayTeamCount + homeTeamCount;
       
-      // Only include games that have at least one of your players
+      // Only include games that have at least one of your players (or opponent players if includeOpponents)
       if (totalPlayerCount > 0) {
         const teamsWithPlayers = [];
         if (awayTeamCount > 0) teamsWithPlayers.push(game.away_team);
         if (homeTeamCount > 0) teamsWithPlayers.push(game.home_team);
         
-        // Calculate starter count if needed
+        // Calculate player counts including opponents if enabled
+        let displayPlayerCount = totalPlayerCount;
         let starterCount = 0;
+        
+        if (includeOpponents) {
+          // Count opponent players too
+          for (const team of teamsWithPlayers) {
+            const opponentPlayers = opponentDetailsMap.get(team) || [];
+            displayPlayerCount += opponentPlayers.length;
+          }
+        }
+        
         if (onlyStarters) {
           for (const team of teamsWithPlayers) {
+            // Count both user and opponent starters
             const teamPlayers = playerDetailsMap.get(team) || [];
             starterCount += teamPlayers.filter(p => p.isStarter).length;
+            
+            if (includeOpponents) {
+              const opponentPlayers = opponentDetailsMap.get(team) || [];
+              starterCount += opponentPlayers.filter(p => p.isStarter).length;
+            }
           }
         }
         
         gamePlayerCounts.push({
           game,
-          playerCount: totalPlayerCount,
+          playerCount: displayPlayerCount,
           teams: teamsWithPlayers,
           starterCount
         });
@@ -459,7 +475,7 @@ export async function getRecommendedGames(
     }
     
     // Sort games by player count (descending)
-    // If onlyStarters is true, sort by starter count; otherwise sort by total count
+    // If onlyStarters is true, sort by starter count; otherwise sort by total count (including opponents if enabled)
     gamePlayerCounts.sort((a, b) => {
       if (onlyStarters) {
         return (b.starterCount || 0) - (a.starterCount || 0);

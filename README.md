@@ -51,6 +51,28 @@ Preview the production build:
 npm run preview
 ```
 
+## Deployment
+
+### GitHub Pages Automatic Deployment
+
+This project is configured to automatically deploy to GitHub Pages using GitHub Actions.
+
+**Setup:**
+1. Push your code to GitHub (main branch)
+2. Go to your repository settings → Pages
+3. Select "Deploy from a branch" and choose the `gh-pages` branch
+4. The app will be deployed to: `https://yourusername.github.io/WhatNflGameShouldIWatch/`
+
+**How it works:**
+- Every push to the `main` branch triggers the GitHub Actions workflow
+- The workflow:
+  1. Checks out your code
+  2. Installs dependencies
+  3. Builds the React app with Vite
+  4. Deploys the `dist` folder to the `gh-pages` branch
+
+The workflow file is located at `.github/workflows/deploy.yml`
+
 ## How It Works
 
 1. Enter your Sleeper username
