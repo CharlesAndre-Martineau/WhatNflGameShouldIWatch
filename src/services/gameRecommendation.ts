@@ -158,11 +158,12 @@ export async function getNFLState(): Promise<any> {
 }
 
 /**
- * Analyze rosters and find the game with most players
+ * Analyze rosters and find the top N games with most players
  */
-export async function getRecommendedGame(
-  userId: string
-): Promise<GameRecommendation | null> {
+export async function getRecommendedGames(
+  userId: string,
+  numberOfGames: number = 1
+): Promise<GameRecommendation[]> {
   try {
     // Get current NFL state for season
     const nflState = await getNFLState();
@@ -189,15 +190,16 @@ export async function getRecommendedGame(
     console.log('Debug: Leagues found =', leagues.length);
     if (leagues.length === 0) {
       console.warn('No leagues found for user');
-      return null;
+      return [];
     }
 
     // Get all players data once
     const allPlayers = await getAllPlayersData();
 
-    // Collect all players from all leagues
+    // Collect all players from all leagues, but only count each player once per NFL team
     const playerGameMap = new Map<string, number>(); // NFL team -> count
     const playerDetailsMap = new Map<string, Array<{ name: string; position: string; league: string; isStarter: boolean }>>(); // NFL team -> player_info
+    const uniquePlayers = new Set<string>(); // Track unique player IDs
 
     for (const league of leagues) {
       try {
@@ -205,17 +207,17 @@ export async function getRecommendedGame(
         const rostersResponse = await axios.get(
           `${SLEEPER_API_BASE}/league/${league.league_id}/rosters`
         );
-        
+
         // Find user's roster (match by owner_id)
         const userRoster = rostersResponse.data.find(
           (r: any) => r.owner_id === userId
         );
-        
+
         console.log(`Debug: League ${league.league_id} (${league.name}) - Roster found: ${!!userRoster}`);
         if (!userRoster) {
           console.warn(`No roster found for user in league ${league.league_id}`);
         }
-        
+
         if (!userRoster || !userRoster.players || userRoster.players.length === 0) {
           console.log(`Debug: League ${league.league_id} - Skipping (no players)`);
           continue;
@@ -224,25 +226,27 @@ export async function getRecommendedGame(
         console.log(`Debug: League ${league.league_id} (${league.name}) - Players: ${userRoster.players.length}`);
         console.log(`Debug: League ${league.league_id} - Starters: ${userRoster.starters?.length || 0}`);
 
-        // Count players by their NFL team
+        // Count players by their NFL team, only if not already counted
         userRoster.players.forEach((playerId: string) => {
+          if (uniquePlayers.has(playerId)) return; // Skip if already counted
+          uniquePlayers.add(playerId);
           const player = allPlayers[playerId];
           if (player && player.team) {
             const nflTeam = player.team;
             playerGameMap.set(nflTeam, (playerGameMap.get(nflTeam) || 0) + 1);
-            
+
             if (!playerDetailsMap.has(nflTeam)) {
               playerDetailsMap.set(nflTeam, []);
             }
-            
-            const playerName = player.first_name && player.last_name 
+
+            const playerName = player.first_name && player.last_name
               ? `${player.first_name} ${player.last_name}`
               : player.full_name || playerId;
-            
+
             const position = player.position || 'N/A';
             const leagueName = league.name || `League ${league.league_id}`;
             const isStarter = userRoster.starters?.includes(playerId) || false;
-              
+
             playerDetailsMap.get(nflTeam)!.push({ name: playerName, position, league: leagueName, isStarter });
           }
         });
@@ -252,18 +256,17 @@ export async function getRecommendedGame(
       }
     }
 
-    // Find NFL team with most players
-    let maxTeam = '';
-    let maxCount = 0;
+    // Find NFL teams sorted by player count
+    const teamsWithPlayerCounts: Array<[string, number]> = [];
     playerGameMap.forEach((count, team) => {
-      if (count > maxCount) {
-        maxCount = count;
-        maxTeam = team;
-      }
+      teamsWithPlayerCounts.push([team, count]);
     });
+    
+    // Sort by player count descending
+    teamsWithPlayerCounts.sort((a, b) => b[1] - a[1]);
 
-    if (!maxTeam || maxCount === 0) {
-      return null;
+    if (teamsWithPlayerCounts.length === 0) {
+      return [];
     }
 
     // Get games for current week from ESPN
@@ -293,35 +296,78 @@ export async function getRecommendedGame(
       }
     }
     
-    console.log('Debug: maxTeam =', maxTeam);
     console.log('Debug: currentWeek =', currentWeek);
     console.log('Debug: Total games fetched =', games.length);
     console.log('Debug: Games data:', games.map(g => ({ away: g.away_team, home: g.home_team, kickoff: new Date(g.kickoff).toISOString() })));
     console.log('Debug: Player counts by team:', Array.from(playerGameMap.entries()));
     
-    // Find games for the current week that involve the team with most players
-    const matchingGames = games.filter((game: any) => {
-      return (
-        game.away_team === maxTeam || game.home_team === maxTeam
-      );
+    // Build a map of games to player counts (either team in the game)
+    const gamePlayerCounts: Array<{game: any, playerCount: number, teams: string[]}> = [];
+    
+    for (const game of games) {
+      const awayTeamCount = playerGameMap.get(game.away_team) || 0;
+      const homeTeamCount = playerGameMap.get(game.home_team) || 0;
+      const totalPlayerCount = awayTeamCount + homeTeamCount;
+      
+      // Only include games that have at least one of your players
+      if (totalPlayerCount > 0) {
+        const teamsWithPlayers = [];
+        if (awayTeamCount > 0) teamsWithPlayers.push(game.away_team);
+        if (homeTeamCount > 0) teamsWithPlayers.push(game.home_team);
+        
+        gamePlayerCounts.push({
+          game,
+          playerCount: totalPlayerCount,
+          teams: teamsWithPlayers
+        });
+      }
+    }
+    
+    // Sort games by player count (descending)
+    gamePlayerCounts.sort((a, b) => b.playerCount - a.playerCount);
+    
+    console.log(`Debug: Games with your players: ${gamePlayerCounts.length}`);
+    gamePlayerCounts.forEach((g, idx) => {
+      console.log(`  ${idx + 1}. ${g.game.away_team} @ ${g.game.home_team} (${g.playerCount} players from ${g.teams.join(', ')})`);
     });
-
-    console.log('Debug: Matching games found =', matchingGames.length);
-
-    if (matchingGames.length === 0) {
-      console.warn(`No games found for team ${maxTeam} in the current timeframe`);
-      return null;
+    
+    // Find games for the top N games with most players
+    const recommendations: GameRecommendation[] = [];
+    const maxGamesToRecommend = Math.min(numberOfGames, gamePlayerCounts.length);
+    
+    for (let i = 0; i < maxGamesToRecommend; i++) {
+      const { game, playerCount, teams } = gamePlayerCounts[i];
+      
+      // Combine players from all teams in this game
+      const allPlayersInGame: Array<{ name: string; position: string; league: string; isStarter: boolean }> = [];
+      for (const team of teams) {
+        const teamPlayers = playerDetailsMap.get(team) || [];
+        allPlayersInGame.push(...teamPlayers);
+      }
+      
+      recommendations.push({
+        game: game,
+        playerCount: playerCount,
+        players: allPlayersInGame,
+      });
     }
 
-    const matchingGame = matchingGames[0];
+    if (recommendations.length === 0) {
+      console.warn('No games found with any of your players in the current timeframe');
+      return [];
+    }
 
-    return {
-      game: matchingGame,
-      playerCount: maxCount,
-      players: playerDetailsMap.get(maxTeam) || [],
-    };
+    return recommendations;
   } catch (error) {
-    console.error('Error fetching recommended game:', error);
+    console.error('Error fetching recommended games:', error);
     throw error;
   }
+}
+
+// Backwards compatibility: keep the old single-game function
+export async function getRecommendedGame(
+  userId: string
+): Promise<GameRecommendation | null> {
+  const recommendations = await getRecommendedGames(userId, 1);
+  return recommendations.length > 0 ? recommendations[0] : null;
 }

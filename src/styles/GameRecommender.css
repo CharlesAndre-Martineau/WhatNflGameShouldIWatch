@@ -168,6 +168,44 @@ h1 {
   font-weight: 500;
 }
 
+.number-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.selector-label {
+  font-size: 0.9rem;
+  color: #333;
+  font-weight: 500;
+}
+
+.selector-input {
+  padding: 10px 12px;
+  border: 2px solid #e0e7ff;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  background-color: #f0f4ff;
+  color: #333;
+  cursor: pointer;
+  transition: border-color 0.3s ease;
+}
+
+.selector-input:hover {
+  border-color: #667eea;
+}
+
+.selector-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.recommendations-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
 .player-count {
   text-align: center;
   margin-bottom: 20px;
