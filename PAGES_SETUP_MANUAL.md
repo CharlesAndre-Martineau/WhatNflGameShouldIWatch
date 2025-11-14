@@ -61,3 +61,4 @@ Example:
 ```
 https://CharlesAndre-Martineau.github.io/WhatNflGameShouldIWatch/
 ```
+as
