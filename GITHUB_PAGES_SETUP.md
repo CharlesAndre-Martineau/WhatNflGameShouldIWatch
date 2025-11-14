@@ -1,12 +1,13 @@
 # GitHub Pages Deployment Setup - Summary
 
-Your React + Vite application is now fully configured for automatic deployment to GitHub Pages using GitHub Actions! 🎉
+Your React + Vite application is now fully configured for automatic deployment to GitHub Pages using GitHub's official static HTML deployment! 🎉
 
 ## What's Been Set Up
 
-### 1. **GitHub Actions Workflow** (`.github/workflows/deploy.yml`)
+### 1. **GitHub Actions Workflow - Static HTML** (`.github/workflows/deploy.yml`)
+- Uses GitHub's official `actions/deploy-pages@v4` action
 - Automatically builds your app on every push to `main` branch
-- Runs: Install dependencies → Build → Deploy to `gh-pages` branch
+- Runs: Install dependencies → Build → Upload artifact → Deploy to Pages
 - Free and unlimited deployments
 
 ### 2. **Vite Configuration** (`vite.config.ts`)
@@ -17,6 +18,7 @@ Your React + Vite application is now fully configured for automatic deployment t
 - `README.md` - Updated with deployment instructions
 - `DEPLOYMENT.md` - Comprehensive deployment guide
 - `DEPLOYMENT_CHECKLIST.md` - Step-by-step checklist
+- `GITHUB_PAGES_SETUP.md` - Setup summary
 
 ## Quick Start
 
@@ -29,8 +31,7 @@ Your React + Vite application is now fully configured for automatic deployment t
 
 2. **Configure GitHub Pages:**
    - Go to: GitHub → Settings → Pages
-   - Source: "Deploy from a branch"
-   - Branch: Select `gh-pages` and `/(root)`
+   - Source: Select "GitHub Actions"
    - Save
 
 ### Deploy Your App
@@ -57,26 +58,45 @@ https://YOUR_USERNAME.github.io/WhatNflGameShouldIWatch/
    ↓
 2. GitHub Actions automatically triggers
    ↓
-3. Workflow runs:
+3. Build job runs:
+   - Checks out code
+   - Sets up Node.js
    - Installs dependencies (npm ci)
    - Builds app (npm run build)
-   - Creates optimized dist/ folder
+   - Configures Pages
+   - Uploads dist/ as artifact
    ↓
-4. Deploys dist/ to gh-pages branch
+4. Deploy job runs:
+   - Takes artifact from build job
+   - Deploys to GitHub Pages
    ↓
 5. GitHub Pages serves your site
    ↓
 6. Live at: your-site.github.io/WhatNflGameShouldIWatch/
 ```
 
+## Workflow Architecture
+
+**Two-Job Design:**
+- **Build Job**: Compiles your React app into static files
+- **Deploy Job**: Takes those files and deploys them to GitHub Pages
+
+Benefits:
+- ✅ Clean separation of concerns
+- ✅ Better error handling
+- ✅ Official GitHub approach
+- ✅ Atomic deployments
+
 ## Features
 
+✅ **GitHub's Official Approach** - Uses recommended `actions/deploy-pages`
 ✅ **Automatic Deployment** - No manual steps needed after setup
 ✅ **Free Hosting** - GitHub Pages is completely free
 ✅ **HTTPS** - Your site is automatically HTTPS-secured
 ✅ **Fast** - Vite builds optimized production bundles
 ✅ **CI/CD** - Continuous deployment on every push
 ✅ **Easy Updates** - Just push code, site updates automatically
+✅ **Manual Trigger** - Can manually redeploy from Actions tab
 
 ## Build Output
 
@@ -101,13 +121,30 @@ If you need API keys or secrets:
 Track your deployments anytime:
 - GitHub → Actions tab
 - Shows status, logs, and history of all deployments
+- Can manually trigger from Actions tab if needed
+
+## Manual Deployment Trigger
+
+Redeploy without making a commit:
+
+1. Go to: GitHub repository → Actions tab
+2. Click "Deploy static content to Pages"
+3. Click "Run workflow"
+4. Select branch (main) and click "Run workflow"
+
+## Permissions Used
+
+The workflow uses minimal required permissions:
+- `contents: read` - Read your repository code
+- `pages: write` - Write to GitHub Pages
+- `id-token: write` - Secure deployment identity
 
 ## Troubleshooting
 
 **Site not appearing?**
+- Set Pages source to "GitHub Actions" (not "Deploy from branch")
 - Wait 5-10 minutes (first deployment takes longer)
 - Check Actions tab for errors
-- Verify Pages settings are correct
 
 **Styles/images not loading?**
 - `base: '/WhatNflGameShouldIWatch/'` in vite.config.ts ✓
@@ -123,17 +160,28 @@ Track your deployments anytime:
 ```
 .github/
 ├── workflows/
-│   └── deploy.yml          ← GitHub Actions workflow
+│   └── deploy.yml          ← GitHub static deployment workflow
 vite.config.ts              ← Updated with base path
 README.md                   ← Updated with deployment section
 DEPLOYMENT.md               ← Full deployment guide
 DEPLOYMENT_CHECKLIST.md     ← Quick reference checklist
+GITHUB_PAGES_SETUP.md       ← This file
 ```
+
+## Why Static HTML Deployment?
+
+**Advantages:**
+- ✅ Official GitHub recommendation
+- ✅ Better integration with GitHub Pages
+- ✅ Cleaner permissions model
+- ✅ More secure (`id-token` based)
+- ✅ Better error handling
+- ✅ Concurrent deployment protection
 
 ## Next Steps
 
 1. ✅ Push your repository to GitHub
-2. ✅ Configure GitHub Pages settings
+2. ✅ Set Pages source to "GitHub Actions"
 3. ✅ Push any commit to main branch
 4. ✅ Wait 2-3 minutes for deployment
 5. ✅ Visit your live site!
@@ -142,6 +190,7 @@ DEPLOYMENT_CHECKLIST.md     ← Quick reference checklist
 
 - [GitHub Pages Docs](https://docs.github.com/en/pages)
 - [GitHub Actions Docs](https://docs.github.com/en/actions)
+- [Deploy Pages Action](https://github.com/actions/deploy-pages)
 - [Vite Deployment Docs](https://vitejs.dev/guide/static-deploy.html#github-pages)
 
 ## Questions?
@@ -155,4 +204,5 @@ Refer to:
 
 **Your app is ready to deploy! 🚀**
 
-Just push to GitHub and let GitHub Actions handle the rest!
+Using GitHub's official static HTML deployment approach.
+Just set Pages source to "GitHub Actions" and push to GitHub!
