@@ -147,6 +147,13 @@ h1 {
   border-radius: 0;
 }
 
+.opponents-toggle {
+  padding: 0;
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+}
+
 .toggle-switch {
   display: flex;
   align-items: center;
@@ -287,6 +294,15 @@ h1 {
   opacity: 0.85;
 }
 
+.player-list li.opponent {
+  background-color: #ffebee;
+  border-left-color: #d32f2f;
+}
+
+.player-list li.opponent:before {
+  color: #d32f2f;
+}
+
 .player-list li:before {
   content: '✓ ';
   color: #667eea;
@@ -331,6 +347,12 @@ h1 {
 
 .bench-label {
   color: #f59e0b;
+  font-weight: 600;
+  font-style: normal;
+}
+
+.opponent-label {
+  color: #d32f2f;
   font-weight: 600;
   font-style: normal;
 }

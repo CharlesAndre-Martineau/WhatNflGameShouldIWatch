@@ -47,6 +47,8 @@ export interface PlayerInfo {
   position: string;
   league: string; // league name
   isStarter: boolean; // whether player is in starting lineup
+  isOpponent?: boolean; // whether this is an opponent's player
+  ownerName?: string; // opponent owner name or 'You'
 }
 
 export interface GameRecommendation {

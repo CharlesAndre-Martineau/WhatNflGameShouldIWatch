@@ -61,6 +61,39 @@ export async function getUserFantasyTeams(
 }
 
 /**
+ * Get matchups for a league in a specific week
+ */
+export async function getLeagueMatchups(
+  leagueId: string,
+  week: number
+): Promise<any[]> {
+  try {
+    const response = await axios.get(
+      `${SLEEPER_API_BASE}/league/${leagueId}/matchups/${week}`
+    );
+    return response.data;
+  } catch (error) {
+    console.warn(`Error fetching matchups for league ${leagueId} week ${week}:`, error);
+    return [];
+  }
+}
+
+/**
+ * Get user information by user ID
+ */
+export async function getSleeperUser(userId: string): Promise<any> {
+  try {
+    const response = await axios.get(
+      `${SLEEPER_API_BASE}/user/${userId}`
+    );
+    return response.data;
+  } catch (error) {
+    console.warn(`Error fetching user ${userId}:`, error);
+    return null;
+  }
+}
+
+/**
  * Get all players data with caching
  */
 export async function getAllPlayersData(): Promise<Record<string, any>> {
@@ -163,7 +196,8 @@ export async function getNFLState(): Promise<any> {
 export async function getRecommendedGames(
   userId: string,
   numberOfGames: number = 1,
-  onlyStarters: boolean = false
+  onlyStarters: boolean = false,
+  includeOpponents: boolean = false
 ): Promise<GameRecommendation[]> {
   try {
     // Get current NFL state for season
@@ -199,11 +233,43 @@ export async function getRecommendedGames(
 
     // Collect all players from all leagues, but only count each player once per NFL team
     const playerGameMap = new Map<string, number>(); // NFL team -> count
-    const playerDetailsMap = new Map<string, Array<{ name: string; position: string; league: string; isStarter: boolean }>>(); // NFL team -> player_info
+    const playerDetailsMap = new Map<string, Array<{ name: string; position: string; league: string; isStarter: boolean; isOpponent?: boolean; ownerName?: string }>>(); // NFL team -> player_info
     const uniquePlayers = new Set<string>(); // Track unique player IDs
+    const opponentDetailsMap = new Map<string, Array<{ name: string; position: string; league: string; isStarter: boolean; isOpponent: boolean; ownerName: string }>>(); // NFL team -> opponent player_info
 
     for (const league of leagues) {
       try {
+        // Get matchups for this league to determine the current week
+        let matchupWeek: number | null = null;
+        let matchups: any[] = [];
+        
+        // Try to find a week with matchups in this league (typically weeks 1-17 for standard leagues)
+        for (let week = currentWeek; week <= currentWeek + 5; week++) {
+          const weekMatchups = await getLeagueMatchups(league.league_id, week);
+          if (weekMatchups && weekMatchups.length > 0) {
+            // Validate that league has exactly one matchup per team (standard league format)
+            // A standard league should have matchups array where each matchup has two rosters
+            const rosterIds = new Set<number>();
+            weekMatchups.forEach((m: any) => {
+              if (m.roster_id) rosterIds.add(m.roster_id);
+            });
+            
+            // If we have matchups and they look valid (not empty), use this week
+            if (rosterIds.size > 0) {
+              matchups = weekMatchups;
+              matchupWeek = week;
+              console.log(`Debug: League ${league.league_id} (${league.name}) - Found matchups for week ${week}`);
+              break;
+            }
+          }
+        }
+        
+        // Skip leagues that don't have valid matchups (non-standard leagues, or league type issues)
+        if (matchupWeek === null || matchups.length === 0) {
+          console.warn(`Debug: League ${league.league_id} (${league.name}) - No valid matchups found, skipping`);
+          continue;
+        }
+        
         // Get rosters for this league
         const rostersResponse = await axios.get(
           `${SLEEPER_API_BASE}/league/${league.league_id}/rosters`
@@ -217,9 +283,10 @@ export async function getRecommendedGames(
         console.log(`Debug: League ${league.league_id} (${league.name}) - Roster found: ${!!userRoster}`);
         if (!userRoster) {
           console.warn(`No roster found for user in league ${league.league_id}`);
+          continue;
         }
 
-        if (!userRoster || !userRoster.players || userRoster.players.length === 0) {
+        if (!userRoster.players || userRoster.players.length === 0) {
           console.log(`Debug: League ${league.league_id} - Skipping (no players)`);
           continue;
         }
@@ -248,9 +315,66 @@ export async function getRecommendedGames(
             const leagueName = league.name || `League ${league.league_id}`;
             const isStarter = userRoster.starters?.includes(playerId) || false;
 
-            playerDetailsMap.get(nflTeam)!.push({ name: playerName, position, league: leagueName, isStarter });
+            playerDetailsMap.get(nflTeam)!.push({ name: playerName, position, league: leagueName, isStarter, isOpponent: false, ownerName: 'You' });
           }
         });
+
+        // Process opponent rosters if includeOpponents is true
+        if (includeOpponents) {
+          // Find the user's matchup for this week to identify their actual opponent
+          const userMatchup = matchups.find((m: any) => m.roster_id === userRoster.roster_id);
+          
+          if (userMatchup && userMatchup.matchup_id) {
+            // Find all other rosters with the same matchup_id (should be exactly 1 in a 1v1 league)
+            const opponentMatchups = matchups.filter((m: any) => 
+              m.roster_id !== userRoster.roster_id && m.matchup_id === userMatchup.matchup_id
+            );
+            
+            // Only process opponent if there's exactly one other roster with same matchup_id (standard 1v1 matchup)
+            if (opponentMatchups.length === 1) {
+              const opponentRosterId = opponentMatchups[0].roster_id;
+              
+              // Find the opponent's roster
+              const opponentRoster = rostersResponse.data.find(
+                (r: any) => r.roster_id === opponentRosterId
+              );
+              
+              if (opponentRoster && opponentRoster.players && opponentRoster.players.length > 0) {
+                // Fetch opponent user info
+                const userInfo = await getSleeperUser(opponentRoster.owner_id);
+                const opponentUsername = userInfo?.username || opponentRoster.owner?.display_name || `Owner ${opponentRoster.owner_id}`;
+                
+                // Count opponent players - skip if already counted
+                opponentRoster.players.forEach((playerId: string) => {
+                  if (uniquePlayers.has(playerId)) return; // Skip if already counted
+                  const player = allPlayers[playerId];
+                  if (player && player.team) {
+                    const nflTeam = player.team;
+                    playerGameMap.set(nflTeam, (playerGameMap.get(nflTeam) || 0) + 1);
+
+                    if (!opponentDetailsMap.has(nflTeam)) {
+                      opponentDetailsMap.set(nflTeam, []);
+                    }
+
+                    const playerName = player.first_name && player.last_name
+                      ? `${player.first_name} ${player.last_name}`
+                      : player.full_name || playerId;
+
+                    const position = player.position || 'N/A';
+                    const leagueName = league.name || `League ${league.league_id}`;
+                    const isStarter = opponentRoster.starters?.includes(playerId) || false;
+
+                    opponentDetailsMap.get(nflTeam)!.push({ name: playerName, position, league: leagueName, isStarter, isOpponent: true, ownerName: opponentUsername });
+                  }
+                });
+              }
+            } else if (opponentMatchups.length === 0) {
+              console.warn(`Debug: League ${league.league_id} (${league.name}) - No opponent found (best ball or other league type)`);
+            } else {
+              console.warn(`Debug: League ${league.league_id} (${league.name}) - Multiple opponents found in same matchup (not a 1v1 league), skipping opponent inclusion`);
+            }
+          }
+        }
       } catch (error) {
         console.error(`Error processing league ${league.league_id}:`, error);
         continue;
@@ -358,10 +482,16 @@ export async function getRecommendedGames(
       const { game, playerCount, teams } = gamePlayerCounts[i];
       
       // Combine players from all teams in this game
-      const allPlayersInGame: Array<{ name: string; position: string; league: string; isStarter: boolean }> = [];
+      const allPlayersInGame: Array<{ name: string; position: string; league: string; isStarter: boolean; isOpponent?: boolean; ownerName?: string }> = [];
       for (const team of teams) {
         const teamPlayers = playerDetailsMap.get(team) || [];
         allPlayersInGame.push(...teamPlayers);
+        
+        // Add opponent players if includeOpponents is enabled
+        if (includeOpponents) {
+          const opponentPlayers = opponentDetailsMap.get(team) || [];
+          allPlayersInGame.push(...opponentPlayers);
+        }
       }
       
       recommendations.push({

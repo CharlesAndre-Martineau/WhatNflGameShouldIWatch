@@ -10,6 +10,7 @@ export const GameRecommender: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [onlyStarters, setOnlyStarters] = useState(true);
   const [numberOfGames, setNumberOfGames] = useState(1);
+  const [includeOpponents, setIncludeOpponents] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,7 +35,7 @@ export const GameRecommender: React.FC = () => {
       }
 
       const userData = await userResponse.json();
-      const gameRecommendations = await getRecommendedGames(userData.user_id, numberOfGames, onlyStarters);
+      const gameRecommendations = await getRecommendedGames(userData.user_id, numberOfGames, onlyStarters, includeOpponents);
 
       if (!gameRecommendations || gameRecommendations.length === 0) {
         setError(
@@ -90,6 +91,18 @@ export const GameRecommender: React.FC = () => {
                 />
                 <span className="toggle-slider"></span>
                 <span className="toggle-text">Only count starters</span>
+              </label>
+            </div>
+            <div className="opponents-toggle">
+              <label className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={includeOpponents}
+                  onChange={(e) => setIncludeOpponents(e.target.checked)}
+                  className="toggle-checkbox"
+                />
+                <span className="toggle-slider"></span>
+                <span className="toggle-text">Include opponent players</span>
               </label>
             </div>
             <div className="number-selector">
@@ -164,14 +177,15 @@ export const GameRecommender: React.FC = () => {
                       {recommendation.players
                         .filter((p) => !onlyStarters || p.isStarter)
                         .map((player, idx) => (
-                        <li key={idx} className={player.isStarter ? 'starter' : 'bench'}>
+                        <li key={idx} className={player.isOpponent ? 'opponent' : (player.isStarter ? 'starter' : 'bench')}>
                           <div className="player-info-row">
                             <span className="player-name">{player.name}</span>
                             <span className="player-position">{player.position}</span>
                           </div>
                           <div className="player-league">
                             {player.league}
-                            {!player.isStarter && <span className="bench-label"> (Bench)</span>}
+                            {player.isOpponent && <span className="opponent-label"> ({player.ownerName})</span>}
+                            {!player.isStarter && !player.isOpponent && <span className="bench-label"> (Bench)</span>}
                           </div>
                         </li>
                       ))}
