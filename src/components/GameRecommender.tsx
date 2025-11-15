@@ -10,7 +10,7 @@ export const GameRecommender: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [onlyStarters, setOnlyStarters] = useState(true);
   const [numberOfGames, setNumberOfGames] = useState(1);
-  const [includeOpponents, setIncludeOpponents] = useState(false);
+  const [includeOpponents, setIncludeOpponents] = useState(true);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
