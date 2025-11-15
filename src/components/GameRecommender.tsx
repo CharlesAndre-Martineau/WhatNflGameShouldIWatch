@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import '../styles/GameRecommender.css';
 import { getRecommendedGames } from '../services/gameRecommendation';
 import { GameRecommendation } from '../services/sleeperApi';
@@ -11,6 +11,20 @@ export const GameRecommender: React.FC = () => {
   const [onlyStarters, setOnlyStarters] = useState(true);
   const [numberOfGames, setNumberOfGames] = useState(1);
   const [includeOpponents, setIncludeOpponents] = useState(true);
+  const [dotCount, setDotCount] = useState(0);
+
+  useEffect(() => {
+    if (!loading) {
+      setDotCount(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setDotCount((prev) => (prev + 1) % 4);
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, [loading]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -134,7 +148,7 @@ export const GameRecommender: React.FC = () => {
               className="submit-button"
               disabled={loading}
             >
-              {loading ? 'Finding Games...' : 'Find My Games'}
+              {loading ? `Finding Games${'.'.repeat(dotCount)}` : 'Find My Games'}
             </button>
           </div>
         </form>
