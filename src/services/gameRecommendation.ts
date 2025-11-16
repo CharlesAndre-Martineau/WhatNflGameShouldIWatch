@@ -197,16 +197,16 @@ export async function getRecommendedGames(
   userId: string,
   numberOfGames: number = 1,
   onlyStarters: boolean = false,
-  includeOpponents: boolean = false
+  includeOpponents: boolean = false,
+  selectedWeek?: number
 ): Promise<GameRecommendation[]> {
   try {
     // Get current NFL state for season
     const nflState = await getNFLState();
     const season = nflState.season;
     
-    // Use the current week from Sleeper API
-    // During off-season, this will point to next season's games
-    let currentWeek = nflState.week;
+    // Use selected week or current week from Sleeper API
+    let currentWeek = selectedWeek || nflState.week;
     
     console.log(`Debug: NFL State - Season: ${season}, Week: ${nflState.week}`);
     

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import '../styles/GameRecommender.css';
 import { getRecommendedGames } from '../services/gameRecommendation';
 import { GameRecommendation } from '../services/sleeperApi';
+import { getNFLState } from '../services/gameRecommendation';
 
 export const GameRecommender: React.FC = () => {
   const [username, setUsername] = useState('');
@@ -11,7 +12,25 @@ export const GameRecommender: React.FC = () => {
   const [onlyStarters, setOnlyStarters] = useState(true);
   const [numberOfGames, setNumberOfGames] = useState(1);
   const [includeOpponents, setIncludeOpponents] = useState(true);
+  const [selectedWeek, setSelectedWeek] = useState<number | undefined>(undefined);
+  const [currentWeek, setCurrentWeek] = useState<number | undefined>(undefined);
   const [dotCount, setDotCount] = useState(0);
+
+  useEffect(() => {
+    // Fetch current week on component mount
+    const fetchCurrentWeek = async () => {
+      try {
+        const nflState = await getNFLState();
+        setCurrentWeek(nflState.week);
+        setSelectedWeek(nflState.week);
+      } catch (err) {
+        console.error('Error fetching current week:', err);
+        setCurrentWeek(1);
+        setSelectedWeek(1);
+      }
+    };
+    fetchCurrentWeek();
+  }, []);
 
   useEffect(() => {
     if (!loading) {
@@ -49,7 +68,7 @@ export const GameRecommender: React.FC = () => {
       }
 
       const userData = await userResponse.json();
-      const gameRecommendations = await getRecommendedGames(userData.user_id, numberOfGames, onlyStarters, includeOpponents);
+      const gameRecommendations = await getRecommendedGames(userData.user_id, numberOfGames, onlyStarters, includeOpponents, selectedWeek);
 
       if (!gameRecommendations || gameRecommendations.length === 0) {
         setError(
@@ -119,22 +138,40 @@ export const GameRecommender: React.FC = () => {
                 <span className="toggle-text">Include opponent players</span>
               </label>
             </div>
-            <div className="number-selector">
-              <label htmlFor="num-games" className="selector-label">How many games?</label>
-              <select
-                id="num-games"
-                value={numberOfGames}
-                onChange={(e) => setNumberOfGames(parseInt(e.target.value))}
-                className="selector-input"
-                disabled={loading}
-              >
-                <option value={1}>1 Game</option>
-                <option value={2}>2 Games</option>
-                <option value={3}>3 Games</option>
-                <option value={4}>4 Games</option>
-                <option value={5}>5 Games</option>
-              </select>
+            
+            <div className="form-controls">
+              <div className="number-selector">
+                <label htmlFor="num-games" className="selector-label">How many games?</label>
+                <select
+                  id="num-games"
+                  value={numberOfGames}
+                  onChange={(e) => setNumberOfGames(parseInt(e.target.value))}
+                  className="selector-input"
+                  disabled={loading}
+                >
+                  <option value={1}>1 Game</option>
+                  <option value={2}>2 Games</option>
+                  <option value={3}>3 Games</option>
+                  <option value={4}>4 Games</option>
+                  <option value={5}>5 Games</option>
+                </select>
+              </div>
+              <div className="week-selector">
+                <label htmlFor="week-select" className="selector-label">Select Week</label>
+                <select
+                  id="week-select"
+                  value={selectedWeek ?? 1}
+                  onChange={(e) => setSelectedWeek(parseInt(e.target.value))}
+                  className="selector-input"
+                  disabled={loading}
+                >
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].map((week) => (
+                    <option key={week} value={week}>Week {week}</option>
+                  ))}
+                </select>
+              </div>
             </div>
+            
             <input
               type="text"
               value={username}
