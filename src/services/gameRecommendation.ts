@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { SleeperLeague, GameRecommendation } from './sleeperApi';
+import { SleeperLeague, GameRecommendation, PlayerInfo } from './sleeperApi';
 
 const SLEEPER_API_BASE = 'https://api.sleeper.app/v1';
 
@@ -46,6 +46,26 @@ const ESPN_TEAM_ID_MAP: Record<string, string> = {
 let playersCache: Record<string, any> = {};
 let playersCacheTime = 0;
 const CACHE_DURATION = 3600000; // 1 hour
+const ESPN_TEAM_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+
+const espnTeamAbbreviationCache = new Map<string, { abbreviation: string; cachedAt: number }>();
+
+const SCORE_WEIGHTS = {
+  USER_STARTER: 2.5,
+  USER_BENCH: 0.25,
+  OPPONENT_STARTER: 1,
+  OPPONENT_BENCH: 0,
+  BOTH_TEAMS_HAVE_PLAYERS_BONUS: 0.5,
+};
+
+function isDefensePosition(position?: string): boolean {
+  if (!position) {
+    return false;
+  }
+
+  const normalized = position.toUpperCase();
+  return normalized === 'DEF' || normalized === 'DST';
+}
 
 /**
  * Get all fantasy teams for a user across all leagues
@@ -135,8 +155,34 @@ export async function getWeekGamesFromESPN(season: number, week: number): Promis
     }).filter(Boolean);
 
     const gameResponses = await Promise.all(gamePromises);
-    
-    const games = gameResponses.map((response) => {
+
+    const resolveTeamAbbreviation = async (competitor: any): Promise<string> => {
+      const teamRef = competitor?.team?.$ref;
+      if (teamRef) {
+        const cached = espnTeamAbbreviationCache.get(teamRef);
+        const now = Date.now();
+        if (cached && (now - cached.cachedAt) < ESPN_TEAM_CACHE_DURATION) {
+          return cached.abbreviation;
+        }
+
+        try {
+          const teamResponse = await axios.get(teamRef);
+          const abbreviation = teamResponse.data?.abbreviation || '';
+          if (abbreviation) {
+            espnTeamAbbreviationCache.set(teamRef, { abbreviation, cachedAt: now });
+            return abbreviation;
+          }
+        } catch (error) {
+          console.warn('Error resolving ESPN team abbreviation:', error);
+        }
+      }
+
+      // Fallback for robustness if team ref cannot be resolved.
+      const teamId = String(competitor?.id || '');
+      return ESPN_TEAM_ID_MAP[teamId] || '';
+    };
+
+    const games = await Promise.all(gameResponses.map(async (response) => {
       const event = response.data;
       if (!event.competitions || event.competitions.length === 0) {
         return null;
@@ -148,21 +194,19 @@ export async function getWeekGamesFromESPN(season: number, week: number): Promis
       let homeTeam = '';
       let awayTeam = '';
 
-      // Extract team abbreviations using ESPN team ID mapping
-      competitors.forEach((competitor: any) => {
-        const teamId = String(competitor.id);
-        const teamAbbr = ESPN_TEAM_ID_MAP[teamId] || '';
-        
-        console.log(`Debug ESPN Competitor: ID=${teamId}, Mapped=${teamAbbr}, HomeAway=${competitor.homeAway}`);
-        
+      for (const competitor of competitors) {
+        const teamAbbr = await resolveTeamAbbreviation(competitor);
+
         if (competitor.homeAway === 'home') {
           homeTeam = teamAbbr;
         } else if (competitor.homeAway === 'away') {
           awayTeam = teamAbbr;
         }
-      });
+      }
 
-      console.log(`Debug ESPN: Event ${event.id} - Away: ${awayTeam}, Home: ${homeTeam}`);
+      if (!homeTeam || !awayTeam) {
+        return null;
+      }
 
       return {
         week,
@@ -173,9 +217,9 @@ export async function getWeekGamesFromESPN(season: number, week: number): Promis
         status: competition.status?.type || 'scheduled',
         name: event.name || `${awayTeam} @ ${homeTeam}`,
       };
-    }).filter(Boolean);
+    }));
 
-    return games;
+    return games.filter(Boolean);
   } catch (error) {
     console.error('Error fetching NFL schedule from ESPN:', error);
     return [];
@@ -198,110 +242,73 @@ export async function getRecommendedGames(
   numberOfGames: number = 1,
   onlyStarters: boolean = false,
   includeOpponents: boolean = false,
-  selectedWeek?: number
+  selectedWeek?: number,
+  leagueFilter?: string,
+  doubleCount: boolean = true,
+  excludeDefense: boolean = false
 ): Promise<GameRecommendation[]> {
   try {
-    // Get current NFL state for season
     const nflState = await getNFLState();
     const season = nflState.season;
-    
-    // Use selected week or current week from Sleeper API
     let currentWeek = selectedWeek || nflState.week;
-    
-    console.log(`Debug: NFL State - Season: ${season}, Week: ${nflState.week}`);
-    
-    // If we're in off-season (week > 18), adjust to fetch the actual current week
-    // The NFL regular season is weeks 1-18
+    const hasExplicitWeekSelection = typeof selectedWeek === 'number';
+
     if (currentWeek > 18) {
-      // We're likely in post-season or off-season
-      // Try to use week 1 for the current active season
       currentWeek = 1;
-      console.log(`Debug: Off-season detected, adjusted week to: ${currentWeek}`);
     }
 
-    // Get all leagues for user
     const leagues = await getUserFantasyTeams(userId, season);
-    
-    console.log('Debug: Leagues found =', leagues.length);
     if (leagues.length === 0) {
-      console.warn('No leagues found for user');
       return [];
     }
 
-    // Get all players data once
     const allPlayers = await getAllPlayersData();
 
-    // Collect all players from all leagues, but only count each player once per NFL team
-    const playerGameMap = new Map<string, number>(); // NFL team -> count
-    const playerDetailsMap = new Map<string, Array<{ name: string; position: string; league: string; isStarter: boolean; isOpponent?: boolean; ownerName?: string }>>(); // NFL team -> player_info
-    const uniquePlayers = new Set<string>(); // Track unique player IDs
-    const opponentDetailsMap = new Map<string, Array<{ name: string; position: string; league: string; isStarter: boolean; isOpponent: boolean; ownerName: string }>>(); // NFL team -> opponent player_info
+    const userTeamCountMap = new Map<string, number>();
+    const opponentTeamCountMap = new Map<string, number>();
+    const playerDetailsMap = new Map<string, PlayerInfo[]>();
+    const opponentDetailsMap = new Map<string, PlayerInfo[]>();
+    const globallyCountedUserPlayers = new Set<string>();
+    const globallyCountedOpponentPlayers = new Set<string>();
 
     for (const league of leagues) {
       try {
-        // Get matchups for this league to determine the current week
-        let matchupWeek: number | null = null;
-        let matchups: any[] = [];
-        
-        // Try to find a week with matchups in this league (typically weeks 1-17 for standard leagues)
-        for (let week = currentWeek; week <= currentWeek + 5; week++) {
-          const weekMatchups = await getLeagueMatchups(league.league_id, week);
-          if (weekMatchups && weekMatchups.length > 0) {
-            // Validate that league has exactly one matchup per team (standard league format)
-            // A standard league should have matchups array where each matchup has two rosters
-            const rosterIds = new Set<number>();
-            weekMatchups.forEach((m: any) => {
-              if (m.roster_id) rosterIds.add(m.roster_id);
-            });
-            
-            // If we have matchups and they look valid (not empty), use this week
-            if (rosterIds.size > 0) {
-              matchups = weekMatchups;
-              matchupWeek = week;
-              console.log(`Debug: League ${league.league_id} (${league.name}) - Found matchups for week ${week}`);
-              break;
-            }
-          }
-        }
-        
-        // Skip leagues that don't have valid matchups (non-standard leagues, or league type issues)
-        if (matchupWeek === null || matchups.length === 0) {
-          console.warn(`Debug: League ${league.league_id} (${league.name}) - No valid matchups found, skipping`);
+        if (leagueFilter && league.name !== leagueFilter) {
           continue;
         }
-        
-        // Get rosters for this league
+
         const rostersResponse = await axios.get(
           `${SLEEPER_API_BASE}/league/${league.league_id}/rosters`
         );
 
-        // Find user's roster (match by owner_id)
         const userRoster = rostersResponse.data.find(
           (r: any) => r.owner_id === userId
         );
-
-        console.log(`Debug: League ${league.league_id} (${league.name}) - Roster found: ${!!userRoster}`);
         if (!userRoster) {
-          console.warn(`No roster found for user in league ${league.league_id}`);
           continue;
         }
 
         if (!userRoster.players || userRoster.players.length === 0) {
-          console.log(`Debug: League ${league.league_id} - Skipping (no players)`);
           continue;
         }
 
-        console.log(`Debug: League ${league.league_id} (${league.name}) - Players: ${userRoster.players.length}`);
-        console.log(`Debug: League ${league.league_id} - Starters: ${userRoster.starters?.length || 0}`);
-
-        // Count players by their NFL team, only if not already counted
+        const seenUserPlayersInLeague = new Set<string>();
         userRoster.players.forEach((playerId: string) => {
-          if (uniquePlayers.has(playerId)) return; // Skip if already counted
-          uniquePlayers.add(playerId);
+          if (seenUserPlayersInLeague.has(playerId)) return;
+          if (!doubleCount && globallyCountedUserPlayers.has(playerId)) return;
+
+          seenUserPlayersInLeague.add(playerId);
+          globallyCountedUserPlayers.add(playerId);
           const player = allPlayers[playerId];
-          if (player && player.team) {
-            const nflTeam = player.team;
-            playerGameMap.set(nflTeam, (playerGameMap.get(nflTeam) || 0) + 1);
+          const nflTeam = player?.team || player?.nfl_team;
+          const position = player?.position || 'N/A';
+
+          if (excludeDefense && isDefensePosition(position)) {
+            return;
+          }
+
+          if (player && nflTeam) {
+            userTeamCountMap.set(nflTeam, (userTeamCountMap.get(nflTeam) || 0) + 1);
 
             if (!playerDetailsMap.has(nflTeam)) {
               playerDetailsMap.set(nflTeam, []);
@@ -311,67 +318,101 @@ export async function getRecommendedGames(
               ? `${player.first_name} ${player.last_name}`
               : player.full_name || playerId;
 
-            const position = player.position || 'N/A';
             const leagueName = league.name || `League ${league.league_id}`;
             const isStarter = userRoster.starters?.includes(playerId) || false;
 
-            playerDetailsMap.get(nflTeam)!.push({ name: playerName, position, league: leagueName, isStarter, isOpponent: false, ownerName: 'You' });
+            playerDetailsMap.get(nflTeam)!.push({
+              name: playerName,
+              position,
+              league: leagueName,
+              isStarter,
+              isOpponent: false,
+              ownerName: 'You',
+            });
           }
         });
 
-        // Process opponent rosters if includeOpponents is true
         if (includeOpponents) {
-          // Find the user's matchup for this week to identify their actual opponent
-          const userMatchup = matchups.find((m: any) => m.roster_id === userRoster.roster_id);
-          
-          if (userMatchup && userMatchup.matchup_id) {
-            // Find all other rosters with the same matchup_id (should be exactly 1 in a 1v1 league)
-            const opponentMatchups = matchups.filter((m: any) => 
-              m.roster_id !== userRoster.roster_id && m.matchup_id === userMatchup.matchup_id
-            );
-            
-            // Only process opponent if there's exactly one other roster with same matchup_id (standard 1v1 matchup)
-            if (opponentMatchups.length === 1) {
-              const opponentRosterId = opponentMatchups[0].roster_id;
-              
-              // Find the opponent's roster
-              const opponentRoster = rostersResponse.data.find(
-                (r: any) => r.roster_id === opponentRosterId
-              );
-              
-              if (opponentRoster && opponentRoster.players && opponentRoster.players.length > 0) {
-                // Fetch opponent user info
-                const userInfo = await getSleeperUser(opponentRoster.owner_id);
-                const opponentUsername = userInfo?.username || opponentRoster.owner?.display_name || `Owner ${opponentRoster.owner_id}`;
-                
-                // Count opponent players - skip if already counted
-                opponentRoster.players.forEach((playerId: string) => {
-                  if (uniquePlayers.has(playerId)) return; // Skip if already counted
-                  const player = allPlayers[playerId];
-                  if (player && player.team) {
-                    const nflTeam = player.team;
-                    playerGameMap.set(nflTeam, (playerGameMap.get(nflTeam) || 0) + 1);
+          let matchups: any[] = [];
+          const candidateWeeks = hasExplicitWeekSelection
+            ? [currentWeek]
+            : [currentWeek, currentWeek + 1, currentWeek + 2, currentWeek + 3, currentWeek + 4, currentWeek + 5];
 
-                    if (!opponentDetailsMap.has(nflTeam)) {
-                      opponentDetailsMap.set(nflTeam, []);
+          for (const week of candidateWeeks) {
+            const weekMatchups = await getLeagueMatchups(league.league_id, week);
+            if (weekMatchups && weekMatchups.length > 0) {
+              const rosterIds = new Set<number>();
+              weekMatchups.forEach((m: any) => {
+                if (m.roster_id) rosterIds.add(m.roster_id);
+              });
+
+              if (rosterIds.size > 0) {
+                matchups = weekMatchups;
+                break;
+              }
+            }
+          }
+
+          if (matchups.length > 0) {
+            const userMatchup = matchups.find((m: any) => m.roster_id === userRoster.roster_id);
+
+            if (userMatchup && userMatchup.matchup_id) {
+              const opponentMatchups = matchups.filter((m: any) => 
+                m.roster_id !== userRoster.roster_id && m.matchup_id === userMatchup.matchup_id
+              );
+
+              if (opponentMatchups.length === 1) {
+                const opponentRosterId = opponentMatchups[0].roster_id;
+
+                const opponentRoster = rostersResponse.data.find(
+                  (r: any) => r.roster_id === opponentRosterId
+                );
+
+                if (opponentRoster && opponentRoster.players && opponentRoster.players.length > 0) {
+                  const userInfo = await getSleeperUser(opponentRoster.owner_id);
+                  const opponentUsername = userInfo?.username || opponentRoster.owner?.display_name || `Owner ${opponentRoster.owner_id}`;
+
+                  const seenOpponentPlayersInLeague = new Set<string>();
+                  opponentRoster.players.forEach((playerId: string) => {
+                    if (seenOpponentPlayersInLeague.has(playerId)) return;
+                    if (!doubleCount && globallyCountedOpponentPlayers.has(playerId)) return;
+
+                    seenOpponentPlayersInLeague.add(playerId);
+                    globallyCountedOpponentPlayers.add(playerId);
+                    const player = allPlayers[playerId];
+                    const nflTeam = player?.team || player?.nfl_team;
+                    const position = player?.position || 'N/A';
+
+                    if (excludeDefense && isDefensePosition(position)) {
+                      return;
                     }
 
-                    const playerName = player.first_name && player.last_name
-                      ? `${player.first_name} ${player.last_name}`
-                      : player.full_name || playerId;
+                    if (player && nflTeam) {
+                      opponentTeamCountMap.set(nflTeam, (opponentTeamCountMap.get(nflTeam) || 0) + 1);
 
-                    const position = player.position || 'N/A';
-                    const leagueName = league.name || `League ${league.league_id}`;
-                    const isStarter = opponentRoster.starters?.includes(playerId) || false;
+                      if (!opponentDetailsMap.has(nflTeam)) {
+                        opponentDetailsMap.set(nflTeam, []);
+                      }
 
-                    opponentDetailsMap.get(nflTeam)!.push({ name: playerName, position, league: leagueName, isStarter, isOpponent: true, ownerName: opponentUsername });
-                  }
-                });
+                      const playerName = player.first_name && player.last_name
+                        ? `${player.first_name} ${player.last_name}`
+                        : player.full_name || playerId;
+
+                      const leagueName = league.name || `League ${league.league_id}`;
+                      const isStarter = opponentRoster.starters?.includes(playerId) || false;
+
+                      opponentDetailsMap.get(nflTeam)!.push({
+                        name: playerName,
+                        position,
+                        league: leagueName,
+                        isStarter,
+                        isOpponent: true,
+                        ownerName: opponentUsername,
+                      });
+                    }
+                  });
+                }
               }
-            } else if (opponentMatchups.length === 0) {
-              console.warn(`Debug: League ${league.league_id} (${league.name}) - No opponent found (best ball or other league type)`);
-            } else {
-              console.warn(`Debug: League ${league.league_id} (${league.name}) - Multiple opponents found in same matchup (not a 1v1 league), skipping opponent inclusion`);
             }
           }
         }
@@ -381,144 +422,166 @@ export async function getRecommendedGames(
       }
     }
 
-    // Find NFL teams sorted by player count
-    const teamsWithPlayerCounts: Array<[string, number]> = [];
-    playerGameMap.forEach((count, team) => {
-      teamsWithPlayerCounts.push([team, count]);
-    });
-    
-    // Sort by player count descending
-    teamsWithPlayerCounts.sort((a, b) => b[1] - a[1]);
-
-    if (teamsWithPlayerCounts.length === 0) {
-      return [];
-    }
-
-    // Get games for current week from ESPN
-    // Try to find games that are actually this week (November 2025)
     let games: any[] = [];
-    const now = Date.now();
-    const oneWeekMs = 7 * 24 * 60 * 60 * 1000; // 7 days
-    const twoWeeksAgo = now - oneWeekMs;
-    const fourWeeksFromNow = now + (4 * oneWeekMs);
-    
-    // Try multiple weeks to find games that are actually in the current timeframe
-    for (let i = 0; i < 5; i++) {
-      const tryWeek = currentWeek + i;
-      const weekGames = await getWeekGamesFromESPN(season, tryWeek);
-      console.log(`Debug: Week ${tryWeek} - Found ${weekGames.length} games`);
-      
-      // Check if any games are in the current timeframe (this week)
-      const recentGames = weekGames.filter((game: any) => {
-        return game.kickoff >= twoWeeksAgo && game.kickoff <= fourWeeksFromNow;
-      });
-      
-      if (recentGames.length > 0) {
-        console.log(`Debug: Found ${recentGames.length} games in current timeframe at week ${tryWeek}`);
-        games = recentGames;
-        currentWeek = tryWeek;
-        break;
-      }
-    }
-    
-    console.log('Debug: currentWeek =', currentWeek);
-    console.log('Debug: Total games fetched =', games.length);
-    console.log('Debug: Games data:', games.map(g => ({ away: g.away_team, home: g.home_team, kickoff: new Date(g.kickoff).toISOString() })));
-    console.log('Debug: Player counts by team:', Array.from(playerGameMap.entries()));
-    
-    // Build a map of games to player counts (either team in the game)
-    const gamePlayerCounts: Array<{game: any, playerCount: number, teams: string[], starterCount?: number}> = [];
-    
-    for (const game of games) {
-      const awayTeamCount = playerGameMap.get(game.away_team) || 0;
-      const homeTeamCount = playerGameMap.get(game.home_team) || 0;
-      const totalPlayerCount = awayTeamCount + homeTeamCount;
-      
-      // Only include games that have at least one of your players (or opponent players if includeOpponents)
-      if (totalPlayerCount > 0) {
-        const teamsWithPlayers = [];
-        if (awayTeamCount > 0) teamsWithPlayers.push(game.away_team);
-        if (homeTeamCount > 0) teamsWithPlayers.push(game.home_team);
-        
-        // Calculate player counts including opponents if enabled
-        let displayPlayerCount = totalPlayerCount;
-        let starterCount = 0;
-        
-        if (includeOpponents) {
-          // Count opponent players too
-          for (const team of teamsWithPlayers) {
-            const opponentPlayers = opponentDetailsMap.get(team) || [];
-            displayPlayerCount += opponentPlayers.length;
-          }
-        }
-        
-        if (onlyStarters) {
-          for (const team of teamsWithPlayers) {
-            // Count both user and opponent starters
-            const teamPlayers = playerDetailsMap.get(team) || [];
-            starterCount += teamPlayers.filter(p => p.isStarter).length;
-            
-            if (includeOpponents) {
-              const opponentPlayers = opponentDetailsMap.get(team) || [];
-              starterCount += opponentPlayers.filter(p => p.isStarter).length;
-            }
-          }
-        }
-        
-        gamePlayerCounts.push({
-          game,
-          playerCount: displayPlayerCount,
-          teams: teamsWithPlayers,
-          starterCount
+
+    if (hasExplicitWeekSelection) {
+      // Respect the user's selected week exactly instead of filtering by current date window.
+      games = await getWeekGamesFromESPN(season, currentWeek);
+    } else {
+      const now = Date.now();
+      const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+      const twoWeeksAgo = now - oneWeekMs;
+      const fourWeeksFromNow = now + (4 * oneWeekMs);
+
+      for (let i = 0; i < 5; i++) {
+        const tryWeek = currentWeek + i;
+        const weekGames = await getWeekGamesFromESPN(season, tryWeek);
+
+        const recentGames = weekGames.filter((game: any) => {
+          return game.kickoff >= twoWeeksAgo && game.kickoff <= fourWeeksFromNow;
         });
+
+        if (recentGames.length > 0) {
+          games = recentGames;
+          currentWeek = tryWeek;
+          break;
+        }
       }
     }
-    
-    // Sort games by player count (descending)
-    // If onlyStarters is true, sort by starter count; otherwise sort by total count (including opponents if enabled)
+
+    const gamePlayerCounts: Array<{
+      game: any;
+      playerCount: number;
+      teams: string[];
+      starterCount: number;
+      benchCount: number;
+      opponentCount: number;
+      interestScore: number;
+      allPlayersInGame: PlayerInfo[];
+      topPlayers: string[];
+      rankingReason: string;
+    }> = [];
+
+    for (const game of games) {
+      const userAwayCount = userTeamCountMap.get(game.away_team) || 0;
+      const userHomeCount = userTeamCountMap.get(game.home_team) || 0;
+      const opponentAwayCount = includeOpponents ? (opponentTeamCountMap.get(game.away_team) || 0) : 0;
+      const opponentHomeCount = includeOpponents ? (opponentTeamCountMap.get(game.home_team) || 0) : 0;
+      const totalRelevantPlayers = userAwayCount + userHomeCount + opponentAwayCount + opponentHomeCount;
+
+      if (totalRelevantPlayers === 0) {
+        continue;
+      }
+
+      const teamsWithPlayers: string[] = [];
+      if (userAwayCount + opponentAwayCount > 0) teamsWithPlayers.push(game.away_team);
+      if (userHomeCount + opponentHomeCount > 0) teamsWithPlayers.push(game.home_team);
+
+      const allPlayersInGame: PlayerInfo[] = [];
+      teamsWithPlayers.forEach((team) => {
+        const userPlayers = playerDetailsMap.get(team) || [];
+        const opponentPlayers = includeOpponents ? (opponentDetailsMap.get(team) || []) : [];
+        allPlayersInGame.push(...userPlayers, ...opponentPlayers);
+      });
+
+      const relevantPlayers = allPlayersInGame.filter((player) => !onlyStarters || player.isStarter);
+      if (relevantPlayers.length === 0) {
+        continue;
+      }
+
+      const userStarters = relevantPlayers.filter((player) => !player.isOpponent && player.isStarter).length;
+      const userBench = relevantPlayers.filter((player) => !player.isOpponent && !player.isStarter).length;
+      const opponentStarters = relevantPlayers.filter((player) => player.isOpponent && player.isStarter).length;
+      const opponentBench = relevantPlayers.filter((player) => player.isOpponent && !player.isStarter).length;
+
+      const starterCount = userStarters + opponentStarters;
+      const benchCount = userBench + opponentBench;
+      const opponentCount = opponentStarters + opponentBench;
+      const playerCount = starterCount + benchCount;
+
+      const hasPlayersOnBothTeams = teamsWithPlayers.length === 2;
+      const interestScore =
+        (userStarters * SCORE_WEIGHTS.USER_STARTER) +
+        (userBench * SCORE_WEIGHTS.USER_BENCH) +
+        (opponentStarters * SCORE_WEIGHTS.OPPONENT_STARTER) +
+        (opponentBench * SCORE_WEIGHTS.OPPONENT_BENCH) +
+        (hasPlayersOnBothTeams ? SCORE_WEIGHTS.BOTH_TEAMS_HAVE_PLAYERS_BONUS : 0);
+
+      const sortedForHighlights = [...relevantPlayers].sort((a, b) => {
+        if (a.isStarter !== b.isStarter) return a.isStarter ? -1 : 1;
+        if ((a.isOpponent || false) !== (b.isOpponent || false)) return a.isOpponent ? 1 : -1;
+        return a.name.localeCompare(b.name);
+      });
+      const topPlayers = sortedForHighlights.slice(0, 3).map((player) => player.name);
+
+      const reasonParts: string[] = [];
+      reasonParts.push(`${starterCount} starter${starterCount === 1 ? '' : 's'}`);
+      if (!onlyStarters) {
+        reasonParts.push(`${benchCount} bench`);
+      }
+      if (includeOpponents && opponentCount > 0) {
+        reasonParts.push(`${opponentCount} opponent`);
+      }
+
+      const rankingReason = `${reasonParts.join(' + ')}${topPlayers.length > 0 ? `. Anchored by ${topPlayers.join(', ')}.` : '.'}`;
+
+      gamePlayerCounts.push({
+        game,
+        playerCount,
+        teams: teamsWithPlayers,
+        starterCount,
+        benchCount,
+        opponentCount,
+        interestScore,
+        allPlayersInGame,
+        topPlayers,
+        rankingReason,
+      });
+    }
+
     gamePlayerCounts.sort((a, b) => {
-      if (onlyStarters) {
-        return (b.starterCount || 0) - (a.starterCount || 0);
-      } else {
+      if (b.interestScore !== a.interestScore) {
+        return b.interestScore - a.interestScore;
+      }
+      if (b.starterCount !== a.starterCount) {
+        return b.starterCount - a.starterCount;
+      }
+      if (b.playerCount !== a.playerCount) {
         return b.playerCount - a.playerCount;
       }
+      return (a.game.kickoff || 0) - (b.game.kickoff || 0);
     });
-    
-    console.log(`Debug: Games with your players: ${gamePlayerCounts.length}`);
-    gamePlayerCounts.forEach((g, idx) => {
-      const countToShow = onlyStarters ? g.starterCount : g.playerCount;
-      console.log(`  ${idx + 1}. ${g.game.away_team} @ ${g.game.home_team} (${countToShow} players from ${g.teams.join(', ')})`);
-    });
-    
-    // Find games for the top N games with most players
+
     const recommendations: GameRecommendation[] = [];
     const maxGamesToRecommend = Math.min(numberOfGames, gamePlayerCounts.length);
-    
+
     for (let i = 0; i < maxGamesToRecommend; i++) {
-      const { game, playerCount, teams } = gamePlayerCounts[i];
-      
-      // Combine players from all teams in this game
-      const allPlayersInGame: Array<{ name: string; position: string; league: string; isStarter: boolean; isOpponent?: boolean; ownerName?: string }> = [];
-      for (const team of teams) {
-        const teamPlayers = playerDetailsMap.get(team) || [];
-        allPlayersInGame.push(...teamPlayers);
-        
-        // Add opponent players if includeOpponents is enabled
-        if (includeOpponents) {
-          const opponentPlayers = opponentDetailsMap.get(team) || [];
-          allPlayersInGame.push(...opponentPlayers);
-        }
-      }
-      
+      const {
+        game,
+        playerCount,
+        allPlayersInGame,
+        interestScore,
+        starterCount,
+        benchCount,
+        opponentCount,
+        rankingReason,
+        topPlayers,
+      } = gamePlayerCounts[i];
+
       recommendations.push({
-        game: game,
-        playerCount: playerCount,
+        game,
+        playerCount,
         players: allPlayersInGame,
+        interestScore,
+        starterCount,
+        benchCount,
+        opponentCount,
+        rankingReason,
+        topPlayers,
       });
     }
 
     if (recommendations.length === 0) {
-      console.warn('No games found with any of your players in the current timeframe');
       return [];
     }
 

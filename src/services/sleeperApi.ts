@@ -55,6 +55,12 @@ export interface GameRecommendation {
   game: NFLGame;
   playerCount: number;
   players: PlayerInfo[];
+  interestScore: number;
+  starterCount: number;
+  benchCount: number;
+  opponentCount: number;
+  rankingReason: string;
+  topPlayers: string[];
 }
 
 export interface NFLState {

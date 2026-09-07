@@ -6,8 +6,9 @@ A React application that helps you decide which NFL game to watch by analyzing y
 
 - **Sleeper Integration**: Connect with your Sleeper account
 - **Multi-League Support**: Analyzes all your fantasy football leagues
-- **Smart Recommendation**: Shows which NFL game has the most of your players
-- **Player Details**: Lists all your players in the recommended game
+- **Interest Score Ranking**: Ranks games by fantasy impact with starter-heavy weighting
+- **Dual Views**: Browse recommendations as ranked cards or a sortable comparison table
+- **Player Details**: Lists all relevant players in each recommended game
 - **Responsive Design**: Works on desktop and mobile devices
 
 ## Getting Started
@@ -20,12 +21,14 @@ A React application that helps you decide which NFL game to watch by analyzing y
 ### Installation
 
 1. Clone the repository:
+
 ```bash
 git clone https://github.com/CharlesAndre-Martineau/WhatNflGameShouldIWatch.git
 cd WhatNflGameShouldIWatch
 ```
 
 2. Install dependencies:
+
 ```bash
 npm install
 ```
@@ -33,6 +36,7 @@ npm install
 ### Development
 
 Start the development server:
+
 ```bash
 npm run dev
 ```
@@ -42,11 +46,13 @@ The app will open in your browser at `http://localhost:3000`
 ### Building
 
 Build for production:
+
 ```bash
 npm run build
 ```
 
 Preview the production build:
+
 ```bash
 npm run preview
 ```
@@ -58,12 +64,14 @@ npm run preview
 This project is configured to automatically deploy to GitHub Pages using GitHub Actions.
 
 **Setup:**
+
 1. Push your code to GitHub (main branch)
 2. Go to your repository settings → Pages
 3. Select "Deploy from a branch" and choose the `gh-pages` branch
 4. The app will be deployed to: `https://yourusername.github.io/WhatNflGameShouldIWatch/`
 
 **How it works:**
+
 - Every push to the `main` branch triggers the GitHub Actions workflow
 - The workflow:
   1. Checks out your code
@@ -79,24 +87,29 @@ The workflow file is located at `.github/workflows/deploy.yml`
 2. The app fetches all your fantasy football leagues and rosters
 3. It analyzes all players across your teams
 4. It matches players to their NFL teams
-5. It identifies which NFL game has the most of your players
-6. It displays the game matchup, kickoff time, and your players involved
+5. It scores games using your player involvement (with starters weighted above bench)
+6. It ranks the most interesting games and explains each ranking with a starter/bench breakdown
+7. It displays matchup, kickoff time, top players, and full player involvement in card and table views
 
 ## Architecture
 
 ### `/src/services`
+
 - `sleeperApi.ts` - Core API calls to Sleeper API
 - `gameRecommendation.ts` - Business logic for game analysis and recommendation
 
 ### `/src/components`
+
 - `GameRecommender.tsx` - Main UI component
 
 ### `/src/styles`
+
 - `GameRecommender.css` - Styling for the application
 
 ## API Integration
 
 This app uses the public Sleeper API:
+
 - [Sleeper API Documentation](https://docs.sleeper.app/)
 
 ## Technologies Used
