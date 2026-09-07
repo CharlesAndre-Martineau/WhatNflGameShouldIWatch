@@ -58,6 +58,14 @@ const SCORE_WEIGHTS = {
   BOTH_TEAMS_HAVE_PLAYERS_BONUS: 0.5,
 };
 
+function ensureHttpsUrl(url?: string): string {
+  if (!url) {
+    return '';
+  }
+
+  return url.replace(/^http:\/\//i, 'https://');
+}
+
 function isDefensePosition(position?: string): boolean {
   if (!position) {
     return false;
@@ -159,17 +167,18 @@ export async function getWeekGamesFromESPN(season: number, week: number): Promis
     const resolveTeamAbbreviation = async (competitor: any): Promise<string> => {
       const teamRef = competitor?.team?.$ref;
       if (teamRef) {
-        const cached = espnTeamAbbreviationCache.get(teamRef);
+        const normalizedTeamRef = ensureHttpsUrl(teamRef);
+        const cached = espnTeamAbbreviationCache.get(normalizedTeamRef);
         const now = Date.now();
         if (cached && (now - cached.cachedAt) < ESPN_TEAM_CACHE_DURATION) {
           return cached.abbreviation;
         }
 
         try {
-          const teamResponse = await axios.get(teamRef);
+          const teamResponse = await axios.get(normalizedTeamRef);
           const abbreviation = teamResponse.data?.abbreviation || '';
           if (abbreviation) {
-            espnTeamAbbreviationCache.set(teamRef, { abbreviation, cachedAt: now });
+            espnTeamAbbreviationCache.set(normalizedTeamRef, { abbreviation, cachedAt: now });
             return abbreviation;
           }
         } catch (error) {
