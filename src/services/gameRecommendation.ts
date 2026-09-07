@@ -3,45 +3,6 @@ import { SleeperLeague, GameRecommendation, PlayerInfo } from './sleeperApi';
 
 const SLEEPER_API_BASE = 'https://api.sleeper.app/v1';
 
-// ESPN Team ID to NFL Abbreviation Mapping
-// Based on ESPN's team ID system
-const ESPN_TEAM_ID_MAP: Record<string, string> = {
-  '1': 'ATL',   // Atlanta Falcons
-  '2': 'BUF',   // Buffalo Bills
-  '3': 'BAL',   // Baltimore Ravens
-  '4': 'PHI',   // Philadelphia Eagles
-  '5': 'DET',   // Detroit Lions
-  '6': 'CHI',   // Chicago Bears
-  '7': 'NYG',   // New York Giants
-  '8': 'CLE',   // Cleveland Browns
-  '9': 'MIA',   // Miami Dolphins
-  '10': 'SEA',  // Seattle Seahawks
-  '11': 'WAS',  // Washington Commanders
-  '12': 'NE',   // New England Patriots
-  '13': 'GB',   // Green Bay Packers
-  '14': 'TB',   // Tampa Bay Buccaneers
-  '15': 'IND',  // Indianapolis Colts
-  '16': 'TEN',  // Tennessee Titans
-  '17': 'NO',   // New Orleans Saints
-  '18': 'LAC',  // Los Angeles Chargers
-  '19': 'NYJ',  // New York Jets
-  '20': 'DEN',  // Denver Broncos
-  '21': 'MIN',  // Minnesota Vikings
-  '22': 'KC',   // Kansas City Chiefs
-  '23': 'LAR',  // Los Angeles Rams
-  '24': 'PIT',  // Pittsburgh Steelers
-  '25': 'ARI',  // Arizona Cardinals
-  '26': 'CIN',  // Cincinnati Bengals
-  '27': 'LV',   // Las Vegas Raiders
-  '28': 'SF',   // San Francisco 49ers
-  '29': 'CAR',  // Carolina Panthers
-  '30': 'JAC',  // Jacksonville Jaguars
-  '31': 'HOU',  // Houston Texans
-  '32': 'DAL',  // Dallas Cowboys
-  '33': 'TB',   // Tampa Bay Buccaneers (backup)
-  '34': 'KC',   // Kansas City Chiefs (backup)
-};
-
 // Cache for players data to avoid repeated large API calls
 let playersCache: Record<string, any> = {};
 let playersCacheTime = 0;
@@ -166,29 +127,29 @@ export async function getWeekGamesFromESPN(season: number, week: number): Promis
 
     const resolveTeamAbbreviation = async (competitor: any): Promise<string> => {
       const teamRef = competitor?.team?.$ref;
-      if (teamRef) {
-        const normalizedTeamRef = ensureHttpsUrl(teamRef);
-        const cached = espnTeamAbbreviationCache.get(normalizedTeamRef);
-        const now = Date.now();
-        if (cached && (now - cached.cachedAt) < ESPN_TEAM_CACHE_DURATION) {
-          return cached.abbreviation;
-        }
-
-        try {
-          const teamResponse = await axios.get(normalizedTeamRef);
-          const abbreviation = teamResponse.data?.abbreviation || '';
-          if (abbreviation) {
-            espnTeamAbbreviationCache.set(normalizedTeamRef, { abbreviation, cachedAt: now });
-            return abbreviation;
-          }
-        } catch (error) {
-          console.warn('Error resolving ESPN team abbreviation:', error);
-        }
+      if (!teamRef) {
+        throw new Error(`Missing ESPN team ref for competitor ${competitor?.id || 'unknown'}`);
       }
 
-      // Fallback for robustness if team ref cannot be resolved.
-      const teamId = String(competitor?.id || '');
-      return ESPN_TEAM_ID_MAP[teamId] || '';
+      const normalizedTeamRef = ensureHttpsUrl(teamRef);
+      const cached = espnTeamAbbreviationCache.get(normalizedTeamRef);
+      const now = Date.now();
+      if (cached && (now - cached.cachedAt) < ESPN_TEAM_CACHE_DURATION) {
+        return cached.abbreviation;
+      }
+
+      try {
+        const teamResponse = await axios.get(normalizedTeamRef);
+        const abbreviation = teamResponse.data?.abbreviation || '';
+        if (abbreviation) {
+          espnTeamAbbreviationCache.set(normalizedTeamRef, { abbreviation, cachedAt: now });
+          return abbreviation;
+        }
+      } catch (error) {
+        console.warn('Error resolving ESPN team abbreviation:', error);
+      }
+
+      throw new Error(`Unable to resolve team abbreviation from ESPN ref: ${normalizedTeamRef}`);
     };
 
     const games = await Promise.all(gameResponses.map(async (response) => {
@@ -214,7 +175,7 @@ export async function getWeekGamesFromESPN(season: number, week: number): Promis
       }
 
       if (!homeTeam || !awayTeam) {
-        return null;
+        throw new Error(`Missing home/away team abbreviation for ESPN event ${event?.id || 'unknown'}`);
       }
 
       return {
@@ -231,7 +192,7 @@ export async function getWeekGamesFromESPN(season: number, week: number): Promis
     return games.filter(Boolean);
   } catch (error) {
     console.error('Error fetching NFL schedule from ESPN:', error);
-    return [];
+    throw new Error('Unable to fetch NFL schedule from ESPN. Team data is incomplete or inaccessible.');
   }
 }
 
