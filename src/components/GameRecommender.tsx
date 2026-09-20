@@ -21,7 +21,31 @@ export const GameRecommender: React.FC = () => {
   const [leagueFilter, setLeagueFilter] = useState('all');
   const [doubleCount, setDoubleCount] = useState(true);
   const [excludeDefense, setExcludeDefense] = useState(false);
+  const [groupByKickoff, setGroupByKickoff] = useState(false);
   const [selectedGame, setSelectedGame] = useState<GameRecommendation | null>(null);
+  const [requestedGameId, setRequestedGameId] = useState<string | null>(null);
+
+  const getGameId = (recommendation: GameRecommendation): string => (
+    `${recommendation.game.away_team}-${recommendation.game.home_team}-${recommendation.game.kickoff || 0}`
+  );
+
+  const updateUrlParams = (usernameValue: string, gameId?: string | null) => {
+    const params = new URLSearchParams(window.location.search);
+    params.set('username', usernameValue);
+    params.set('week', String(selectedWeek ?? 1));
+    params.set('league', leagueFilter);
+    params.set('doubleCount', doubleCount ? '1' : '0');
+    params.set('excludeDefense', excludeDefense ? '1' : '0');
+    params.set('groupByKickoff', groupByKickoff ? '1' : '0');
+
+    if (gameId) {
+      params.set('game', gameId);
+    } else {
+      params.delete('game');
+    }
+
+    window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+  };
 
   useEffect(() => {
     const fetchCurrentWeek = async () => {
@@ -31,6 +55,8 @@ export const GameRecommender: React.FC = () => {
       const weekFromUrl = Number(params.get('week'));
       const doubleCountFromUrl = params.get('doubleCount');
       const excludeDefenseFromUrl = params.get('excludeDefense');
+      const groupByKickoffFromUrl = params.get('groupByKickoff');
+      const gameFromUrl = params.get('game');
 
       if (usernameFromUrl) {
         setUsername(usernameFromUrl);
@@ -43,6 +69,12 @@ export const GameRecommender: React.FC = () => {
       }
       if (excludeDefenseFromUrl === '1') {
         setExcludeDefense(true);
+      }
+      if (groupByKickoffFromUrl === '1') {
+        setGroupByKickoff(true);
+      }
+      if (gameFromUrl) {
+        setRequestedGameId(gameFromUrl);
       }
 
       try {
@@ -115,21 +147,22 @@ export const GameRecommender: React.FC = () => {
         doubleCount,
         excludeDefense
       );
-
-      const params = new URLSearchParams(window.location.search);
-      params.set('username', trimmedUsername);
-      params.set('week', String(selectedWeek ?? 1));
-      params.set('league', leagueFilter);
-      params.set('doubleCount', doubleCount ? '1' : '0');
-      params.set('excludeDefense', excludeDefense ? '1' : '0');
-      window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
       setUsername(trimmedUsername);
 
       if (!gameRecommendations || gameRecommendations.length === 0) {
+        updateUrlParams(trimmedUsername, null);
         setError(
           'No games found with your players this week. Check your league settings.'
         );
       } else {
+        if (requestedGameId) {
+          const requestedGame = gameRecommendations.find((recommendation) => getGameId(recommendation) === requestedGameId) || null;
+          setSelectedGame(requestedGame);
+          setRequestedGameId(requestedGame ? getGameId(requestedGame) : null);
+          updateUrlParams(trimmedUsername, requestedGame ? getGameId(requestedGame) : null);
+        } else {
+          updateUrlParams(trimmedUsername, null);
+        }
         setRecommendations(gameRecommendations);
       }
     } catch (err) {
@@ -189,27 +222,102 @@ export const GameRecommender: React.FC = () => {
   };
 
   const tableRows = recommendations.map((recommendation, idx) => ({
+    key: `${recommendation.game.away_team}-${recommendation.game.home_team}-${recommendation.game.kickoff || 0}-${idx}`,
     myStarterCount: recommendation.players.filter((player) => !player.isOpponent && player.isStarter).length,
     myBenchCount: recommendation.players.filter((player) => !player.isOpponent && !player.isStarter).length,
     theirStarterCount: recommendation.players.filter((player) => player.isOpponent && player.isStarter).length,
     theirBenchCount: recommendation.players.filter((player) => player.isOpponent && !player.isStarter).length,
+    interestScore: recommendation.interestScore,
+    kickoff: recommendation.game.kickoff || 0,
     recommendation,
     rank: idx + 1,
     matchup: `${recommendation.game.away_team} @ ${recommendation.game.home_team}`,
+    gamesCount: 1,
+    matchups: [`${recommendation.game.away_team} @ ${recommendation.game.home_team}`],
   }));
 
-  const sortedTableRows = [...tableRows].sort((a, b) => {
+  const groupedRows = Object.values(
+    tableRows.reduce((acc, row) => {
+      const kickoffKey = String(row.kickoff || 0);
+
+      if (!acc[kickoffKey]) {
+        acc[kickoffKey] = {
+          key: `kickoff-${kickoffKey}`,
+          rank: row.rank,
+          matchup: row.gamesCount === 1 ? row.matchup : `${row.gamesCount} games`,
+          myStarterCount: 0,
+          myBenchCount: 0,
+          theirStarterCount: 0,
+          theirBenchCount: 0,
+          interestScore: 0,
+          kickoff: row.kickoff,
+          gamesCount: 0,
+          matchups: [] as string[],
+          recommendation: row.recommendation,
+        };
+      }
+
+      acc[kickoffKey].myStarterCount += row.myStarterCount;
+      acc[kickoffKey].myBenchCount += row.myBenchCount;
+      acc[kickoffKey].theirStarterCount += row.theirStarterCount;
+      acc[kickoffKey].theirBenchCount += row.theirBenchCount;
+      acc[kickoffKey].interestScore += row.interestScore;
+      acc[kickoffKey].gamesCount += 1;
+      acc[kickoffKey].matchups.push(row.matchup);
+      if (row.rank < acc[kickoffKey].rank) {
+        acc[kickoffKey].rank = row.rank;
+        acc[kickoffKey].recommendation = row.recommendation;
+      }
+
+      return acc;
+    }, {} as Record<string, {
+      key: string;
+      rank: number;
+      matchup: string;
+      myStarterCount: number;
+      myBenchCount: number;
+      theirStarterCount: number;
+      theirBenchCount: number;
+      interestScore: number;
+      kickoff: number;
+      gamesCount: number;
+      matchups: string[];
+      recommendation: GameRecommendation;
+    }>)
+  ).map((group) => ({
+    ...group,
+    matchup: group.gamesCount === 1 ? group.matchups[0] : `${group.gamesCount} games`,
+  }));
+
+  const displayRows = groupByKickoff ? groupedRows : tableRows;
+
+  const dynamicRankByKey = new Map(
+    [...displayRows]
+      .sort((a, b) => {
+        if (b.interestScore !== a.interestScore) {
+          return b.interestScore - a.interestScore;
+        }
+        return (a.kickoff || 0) - (b.kickoff || 0);
+      })
+      .map((row, idx) => [row.key, idx + 1])
+  );
+
+  const sortedTableRows = [...displayRows].sort((a, b) => {
     let comparison = 0;
 
     switch (sortColumn) {
       case 'rank':
-        comparison = a.rank - b.rank;
+        comparison = (dynamicRankByKey.get(a.key) || 0) - (dynamicRankByKey.get(b.key) || 0);
         break;
       case 'matchup':
-        comparison = a.matchup.localeCompare(b.matchup);
+        if (groupByKickoff) {
+          comparison = (a.kickoff || 0) - (b.kickoff || 0);
+        } else {
+          comparison = a.matchup.localeCompare(b.matchup);
+        }
         break;
       case 'interestScore':
-        comparison = a.recommendation.interestScore - b.recommendation.interestScore;
+        comparison = a.interestScore - b.interestScore;
         break;
       case 'myStarterCount':
         comparison = a.myStarterCount - b.myStarterCount;
@@ -224,7 +332,7 @@ export const GameRecommender: React.FC = () => {
         comparison = a.theirBenchCount - b.theirBenchCount;
         break;
       case 'kickoff':
-        comparison = (a.recommendation.game.kickoff || 0) - (b.recommendation.game.kickoff || 0);
+        comparison = (a.kickoff || 0) - (b.kickoff || 0);
         break;
       default:
         comparison = 0;
@@ -250,6 +358,24 @@ export const GameRecommender: React.FC = () => {
           return a.name.localeCompare(b.name);
         })
     : [];
+
+  const selectedGameUserStarters = selectedGameUserPlayers.filter((player) => player.isStarter);
+  const selectedGameUserBench = selectedGameUserPlayers.filter((player) => !player.isStarter);
+  const selectedGameOpponentStarters = selectedGameOpponentPlayers.filter((player) => player.isStarter);
+  const selectedGameOpponentBench = selectedGameOpponentPlayers.filter((player) => !player.isStarter);
+
+  const openGameDetails = (recommendation: GameRecommendation) => {
+    const gameId = getGameId(recommendation);
+    setSelectedGame(recommendation);
+    setRequestedGameId(gameId);
+    updateUrlParams(username, gameId);
+  };
+
+  const closeGameDetails = () => {
+    setSelectedGame(null);
+    setRequestedGameId(null);
+    updateUrlParams(username, null);
+  };
 
   return (
     <div className="game-recommender">
@@ -326,6 +452,15 @@ export const GameRecommender: React.FC = () => {
                 />
                 Exclude DEF
               </label>
+              <label className="double-count-toggle">
+                <input
+                  type="checkbox"
+                  checked={groupByKickoff}
+                  onChange={(e) => setGroupByKickoff(e.target.checked)}
+                  disabled={loading}
+                />
+                Group by kickoff time
+              </label>
             </div>
           </div>
         </form>
@@ -344,7 +479,7 @@ export const GameRecommender: React.FC = () => {
             </div>
             {selectedGame ? (
               <div className="detail-view">
-                <button type="button" className="back-button" onClick={() => setSelectedGame(null)}>
+                <button type="button" className="back-button" onClick={closeGameDetails}>
                   Back to games
                 </button>
                 <h2 className="detail-title">
@@ -354,25 +489,53 @@ export const GameRecommender: React.FC = () => {
                 <div className="detail-grid">
                   <section className="detail-card">
                     <h3>Your players ({selectedGameUserPlayers.length})</h3>
-                    <ul>
-                      {selectedGameUserPlayers.map((player, idx) => (
-                        <li key={`you-${idx}`}>
-                          <span>{player.name} ({player.position})</span>
-                          <span>{player.isStarter ? 'Starter' : 'Bench'} • {player.league}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    <div className="detail-section detail-starters">
+                      <h4>Starters ({selectedGameUserStarters.length})</h4>
+                      <ul>
+                        {selectedGameUserStarters.map((player, idx) => (
+                          <li key={`you-starter-${idx}`}>
+                            <span>{player.name} ({player.position})</span>
+                            <span><strong className="player-tag starter-tag">Starter</strong> • {player.league}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="detail-section detail-bench">
+                      <h4>Bench ({selectedGameUserBench.length})</h4>
+                      <ul>
+                        {selectedGameUserBench.map((player, idx) => (
+                          <li key={`you-bench-${idx}`}>
+                            <span>{player.name} ({player.position})</span>
+                            <span><strong className="player-tag bench-tag">Bench</strong> • {player.league}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   </section>
                   <section className="detail-card">
                     <h3>Opponent players ({selectedGameOpponentPlayers.length})</h3>
-                    <ul>
-                      {selectedGameOpponentPlayers.map((player, idx) => (
-                        <li key={`opp-${idx}`}>
-                          <span>{player.name} ({player.position})</span>
-                          <span>{player.isStarter ? 'Starter' : 'Bench'} • {player.ownerName || 'Opponent'} • {player.league}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    <div className="detail-section detail-starters">
+                      <h4>Starters ({selectedGameOpponentStarters.length})</h4>
+                      <ul>
+                        {selectedGameOpponentStarters.map((player, idx) => (
+                          <li key={`opp-starter-${idx}`}>
+                            <span>{player.name} ({player.position})</span>
+                            <span><strong className="player-tag starter-tag">Starter</strong> • {player.ownerName || 'Opponent'} • {player.league}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="detail-section detail-bench">
+                      <h4>Bench ({selectedGameOpponentBench.length})</h4>
+                      <ul>
+                        {selectedGameOpponentBench.map((player, idx) => (
+                          <li key={`opp-bench-${idx}`}>
+                            <span>{player.name} ({player.position})</span>
+                            <span><strong className="player-tag bench-tag">Bench</strong> • {player.ownerName || 'Opponent'} • {player.league}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   </section>
                 </div>
               </div>
@@ -382,7 +545,7 @@ export const GameRecommender: React.FC = () => {
                   <thead>
                     <tr>
                       <th><button type="button" onClick={() => handleSort('rank')}>Rank</button></th>
-                      <th><button type="button" onClick={() => handleSort('matchup')}>Matchup</button></th>
+                      <th><button type="button" onClick={() => handleSort('matchup')}>{groupByKickoff ? 'Games' : 'Matchup'}</button></th>
                       <th><button type="button" onClick={() => handleSort('interestScore')}>Score</button></th>
                       <th><button type="button" onClick={() => handleSort('myStarterCount')}>Starters</button></th>
                       <th><button type="button" onClick={() => handleSort('myBenchCount')}>Bench</button></th>
@@ -392,20 +555,27 @@ export const GameRecommender: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedTableRows.map(({ recommendation, rank, matchup, myStarterCount, myBenchCount, theirStarterCount, theirBenchCount }) => (
+                    {sortedTableRows.map(({ key, recommendation, matchup, myStarterCount, myBenchCount, theirStarterCount, theirBenchCount, interestScore, kickoff, gamesCount, matchups }) => (
                       <tr
-                        key={`${matchup}-${rank}`}
-                        className="clickable-row"
-                        onClick={() => setSelectedGame(recommendation)}
+                        key={key}
+                        className={!groupByKickoff || gamesCount === 1 ? 'clickable-row' : ''}
+                        onDoubleClick={!groupByKickoff || gamesCount === 1 ? () => openGameDetails(recommendation) : undefined}
                       >
-                        <td>#{rank}</td>
-                        <td className="matchup-cell">{matchup}</td>
-                        <td>{recommendation.interestScore.toFixed(2)}</td>
+                        <td>#{dynamicRankByKey.get(key) || '-'}</td>
+                        <td className={`matchup-cell ${groupByKickoff ? 'grouped-matchup-cell' : ''}`}>
+                          <div>{matchup}</div>
+                          {groupByKickoff && gamesCount > 1 && (
+                            <div className="grouped-matchup-subtitle">
+                              {matchups.join(' • ')}
+                            </div>
+                          )}
+                        </td>
+                        <td>{interestScore.toFixed(2)}</td>
                         <td>{myStarterCount}</td>
                         <td>{myBenchCount}</td>
                         <td>{theirStarterCount}</td>
                         <td>{theirBenchCount}</td>
-                        <td>{formatTime(recommendation.game.kickoff)}</td>
+                        <td>{formatTime(kickoff)}</td>
                       </tr>
                     ))}
                   </tbody>
